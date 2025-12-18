@@ -1,0 +1,331 @@
+## CurriMap ERD 설계 (MVP v1)
+
+### 1. 개요
+
+- **플랫폼**: Supabase (PostgreSQL)
+- **범위**: 온보딩(자녀 프로필/관심사/레벨 진단), 오늘의 미션, 스마트 검색, 간단 리포트, 로드맵 시각화, Admin 도서 등록/수정(CMS)
+- **핵심 원칙**
+  - 부모 1명 : 자녀 N명 (`users` : `children` = 1:N)
+  - 비회원은 검색/둘러보기만 가능, 로드맵/기록 기능은 **완전 잠금**
+  - 레벨은 사전 정의된 그룹 테이블(`levels`)로 관리
+  - 로드맵은 **코스 기준** (`courses`)으로 관리하고, 코스 × 레벨별 설정(`course_levels`)을 통해 목표/난이도 조정
+  - 도서 키워드는 **`TEXT[]` 배열**로 저장 (`GIN` 인덱스 활용)
+  - 미션 기록은 **이벤트 로그 방식**으로, 책을 읽을 때마다 1 row 저장
+  - Streak(연속 학습일)는 **자녀 단위**로 관리
+  - Admin 계정은 사용자와 **완전 분리** (`admin_users`)
+
+---
+
+### 2. ERD 개요 (엔티티 & 관계)
+
+- **Auth / 계정**
+  - `users` (부모 계정 메타, Supabase Auth와 1:1)
+  - `admin_users` (관리자 계정, 일반 사용자와 분리)
+
+- **자녀 / 레벨 / 코스 & 로드맵**
+  - `children` : 자녀 프로필 + 현재 레벨/코스 + 누적 통계
+  - `levels` : 레벨 그룹 정의 (예: Pre-K, AR 0~1, AR 1~2 …)
+  - `courses` : 코스 정의 (예: 옐로우 코스)
+  - `course_levels` : 코스 × 레벨별 목표/설정 (예: 옐로우 코스 + AR 0~1 = 흘려듣기 100시간)
+  - `course_books` : 코스에 포함된 도서 리스트 + 순서 (`sequence_order`)
+  - `child_course_progress` : 자녀 × 코스 진행 상태 (로드맵 시각화에 사용)
+  - `child_interests` : 자녀 × 관심사 태그 (온보딩 취향)
+
+- **도서 / 태그 / 큐레이션**
+  - `books` : 도서 기본 정보 + AR 레벨 + Mom’s Tip + key_words[] + 구매 링크 등
+  - `themes` : 주제 태그 마스터 (공룡, 자동차 등)
+  - `moods` : 분위기 태그 마스터 (웃긴, 감동 등)
+  - `book_themes` : 도서 × 주제 태그 (N:M)
+  - `book_moods` : 도서 × 분위기 태그 (N:M)
+
+- **미션 / 로그 / 통계 / 서재**
+  - `mission_logs` : 미션/자유 기록 이벤트 로그 (읽을 때마다 1 row)
+  - `child_bookshelf` : 자녀 × 도서 상태 (Read / Wish / Reading)
+
+관계 요약:
+- `users (1) ── (N) children`
+- `children (N) ── (N) themes` via `child_interests`
+- `books (N) ── (N) themes` via `book_themes`
+- `books (N) ── (N) moods` via `book_moods`
+- `courses (N) ── (N) books` via `course_books`
+- `children (N) ── (N) courses` via `child_course_progress`
+- `children (1) ── (N) mission_logs`
+- `books (1) ── (N) mission_logs`
+
+---
+
+### 3. 테이블 상세 정의
+
+#### 3.1 `users` (부모 계정 메타)
+
+| 컬럼명      | 타입         | 제약조건                | 설명 |
+|------------|--------------|-------------------------|------|
+| id         | UUID         | PK, NOT NULL           | Supabase auth.user.id 참조 |
+| email      | VARCHAR(255) | UNIQUE, NOT NULL       | 로그인 이메일 |
+| created_at | TIMESTAMP    | NOT NULL, DEFAULT NOW()| 생성일시 |
+| updated_at | TIMESTAMP    | NOT NULL, DEFAULT NOW()| 수정일시 |
+
+인덱스:
+- `UNIQUE (email)`
+
+---
+
+#### 3.2 `children` (자녀 프로필 + 레벨/코스/통계)
+
+| 컬럼명           | 타입         | 제약조건                                        | 설명 |
+|-----------------|--------------|-------------------------------------------------|------|
+| id              | BIGSERIAL    | PK                                              | 자녀 ID |
+| user_id         | UUID         | FK → users(id), NOT NULL                       | 부모 계정 |
+| nickname        | VARCHAR(50)  | NOT NULL                                        | 자녀 닉네임 |
+| birth_months    | INTEGER      | NOT NULL                                        | 나이(개월 수) |
+| gender          | VARCHAR(10)  | CHECK (gender IN ('male','female','other'))     | 성별 |
+| current_level_id| INTEGER      | FK → levels(id)                                 | 현재 레벨 |
+| current_course_id| INTEGER     | FK → courses(id)                                | 현재 진행 코스 |
+| current_streak  | INTEGER      | NOT NULL DEFAULT 0                              | 현재 연속 학습일 |
+| longest_streak  | INTEGER      | NOT NULL DEFAULT 0                              | 최장 연속 학습일 |
+| total_books_read| INTEGER      | NOT NULL DEFAULT 0                              | 누적 읽은 권수 |
+| total_word_count| BIGINT       | NOT NULL DEFAULT 0                              | 누적 노출 단어 수 |
+| created_at      | TIMESTAMP    | NOT NULL DEFAULT NOW()                          | 생성일시 |
+| updated_at      | TIMESTAMP    | NOT NULL DEFAULT NOW()                          | 수정일시 |
+
+인덱스:
+- `INDEX (user_id)`
+- `INDEX (current_level_id)`
+- `INDEX (current_course_id)`
+
+---
+
+#### 3.3 `levels` (레벨 그룹 정의)
+
+| 컬럼명    | 타입         | 제약조건                | 설명 |
+|----------|--------------|-------------------------|------|
+| id       | SERIAL       | PK                      | 레벨 ID |
+| code     | VARCHAR(50)  | UNIQUE, NOT NULL        | 예: PREK, AR_0_1, AR_1_2, AR_2_PLUS |
+| name     | VARCHAR(100) | NOT NULL                | 표시 이름 (예: "Pre-K", "AR 0~1") |
+| min_ar   | NUMERIC(3,1) |                         | AR 최소값 |
+| max_ar   | NUMERIC(3,1) |                         | AR 최대값 |
+| description | TEXT       |                         | 레벨 설명 |
+
+---
+
+#### 3.4 `courses` (코스 정의 – 예: 옐로우 코스)
+
+| 컬럼명    | 타입         | 제약조건                | 설명 |
+|----------|--------------|-------------------------|------|
+| id       | SERIAL       | PK                      | 코스 ID |
+| code     | VARCHAR(50)  | UNIQUE, NOT NULL        | 예: YELLOW_BASIC |
+| name     | VARCHAR(100) | NOT NULL                | 예: "옐로우 코스" |
+| description | TEXT       |                         | 코스 설명 |
+
+---
+
+#### 3.5 `course_levels` (코스 × 레벨별 설정)
+
+| 컬럼명      | 타입      | 제약조건                            | 설명 |
+|------------|-----------|-------------------------------------|------|
+| id         | SERIAL    | PK                                  |      |
+| course_id  | INTEGER   | FK → courses(id), NOT NULL          | 코스 |
+| level_id   | INTEGER   | FK → levels(id), NOT NULL           | 레벨 |
+| goal_hours | INTEGER   |                                     | 목표 시간 (예: 흘려듣기 100/200시간) |
+| description| TEXT      |                                     | 설명 |
+
+제약조건:
+- `UNIQUE (course_id, level_id)`
+
+---
+
+#### 3.6 `books` (도서 기본 정보 + 큐레이션 데이터)
+
+| 컬럼명         | 타입          | 제약조건                             | 설명 |
+|---------------|---------------|--------------------------------------|------|
+| id            | BIGSERIAL     | PK                                   | 도서 ID |
+| title         | VARCHAR(255)  | NOT NULL                             | 제목 |
+| author        | VARCHAR(255)  | NOT NULL                             | 저자 |
+| isbn          | VARCHAR(20)   | UNIQUE                               | ISBN |
+| cover_image_url | TEXT        |                                      | 표지 이미지 URL |
+| ar_level      | NUMERIC(3,1)  |                                      | AR 지수 |
+| mom_tip       | TEXT          |                                      | 엄마표 팁 (줄바꿈/마크다운 TEXT) |
+| key_words     | TEXT[]        |                                      | 핵심 발화 단어 배열 |
+| purchase_url  | TEXT          |                                      | 구매 링크 URL |
+| word_count    | INTEGER       |                                      | 도서 단어 수 |
+| series_name   | VARCHAR(255)  |                                      | 시리즈명 (옵션) |
+| series_order  | INTEGER       |                                      | 시리즈 내 순서 (옵션) |
+| created_at    | TIMESTAMP     | NOT NULL DEFAULT NOW()               | 생성일시 |
+| updated_at    | TIMESTAMP     | NOT NULL DEFAULT NOW()               | 수정일시 |
+
+인덱스:
+- `INDEX (ar_level)`
+- `GIN INDEX (key_words)`
+- `INDEX (series_name, series_order)`
+
+---
+
+#### 3.7 `themes` / `moods` (태그 마스터)
+
+`themes`:
+
+| 컬럼명 | 타입         | 제약조건         | 설명 |
+|--------|--------------|------------------|------|
+| id     | SERIAL       | PK               |      |
+| code   | VARCHAR(50)  | UNIQUE, NOT NULL | 예: DINOSAUR, CAR |
+| name   | VARCHAR(100) | NOT NULL         | 공룡, 자동차 등 |
+
+`moods`:
+
+| 컬럼명 | 타입         | 제약조건         | 설명 |
+|--------|--------------|------------------|------|
+| id     | SERIAL       | PK               |      |
+| code   | VARCHAR(50)  | UNIQUE, NOT NULL | 예: FUNNY, HEARTWARMING |
+| name   | VARCHAR(100) | NOT NULL         | 웃긴, 감동 등 |
+
+---
+
+#### 3.8 `book_themes` / `book_moods` (도서 태그 N:M)
+
+`book_themes`:
+
+| 컬럼명  | 타입    | 제약조건                        | 설명 |
+|--------|---------|---------------------------------|------|
+| id     | SERIAL  | PK                               |      |
+| book_id| BIGINT  | FK → books(id), NOT NULL         | 도서 |
+| theme_id | INTEGER | FK → themes(id), NOT NULL      | 주제 태그 |
+
+제약조건:
+- `UNIQUE (book_id, theme_id)`
+
+`book_moods`는 `mood_id`만 바뀐 동일 구조.
+
+---
+
+#### 3.9 `child_interests` (자녀 관심사 태그)
+
+| 컬럼명   | 타입    | 제약조건                        | 설명 |
+|---------|---------|---------------------------------|------|
+| id      | SERIAL  | PK                               |      |
+| child_id| BIGINT  | FK → children(id), NOT NULL      | 자녀 |
+| theme_id| INTEGER | FK → themes(id), NOT NULL        | 관심사 태그 |
+
+제약조건:
+- `UNIQUE (child_id, theme_id)`
+
+---
+
+#### 3.10 `course_books` (코스 내 도서 리스트 + 순서)
+
+| 컬럼명       | 타입    | 제약조건                              | 설명 |
+|-------------|---------|---------------------------------------|------|
+| id          | SERIAL  | PK                                     |      |
+| course_id   | INTEGER | FK → courses(id), NOT NULL            | 코스 |
+| book_id     | BIGINT  | FK → books(id), NOT NULL              | 도서 |
+| level_id    | INTEGER | FK → levels(id)                       | 해당 책의 레벨(옵션) |
+| sequence_order | INTEGER | NOT NULL                           | 코스 내 표시 순서 (로드맵 시각화) |
+
+제약조건:
+- `UNIQUE (course_id, book_id)`
+
+인덱스:
+- `INDEX (course_id, level_id, sequence_order)`
+
+---
+
+#### 3.11 `child_course_progress` (자녀 × 코스 진행 상태)
+
+| 컬럼명          | 타입      | 제약조건                         | 설명 |
+|----------------|-----------|----------------------------------|------|
+| id             | SERIAL    | PK                               |      |
+| child_id       | BIGINT    | FK → children(id), NOT NULL      | 자녀 |
+| course_id      | INTEGER   | FK → courses(id), NOT NULL       | 코스 |
+| current_position | INTEGER |                                  | 현재 sequence_order |
+| progress_percent | NUMERIC(5,2) |                              | 진행률(%) |
+| started_at     | TIMESTAMP |                                  | 코스 시작 일시 |
+| completed_at   | TIMESTAMP |                                  | 코스 완료 일시 |
+
+제약조건:
+- `UNIQUE (child_id, course_id)`
+
+---
+
+#### 3.12 `mission_logs` (미션/자유 기록 – 이벤트 로그)
+
+| 컬럼명      | 타입         | 제약조건                                         | 설명 |
+|------------|--------------|--------------------------------------------------|------|
+| id         | BIGSERIAL    | PK                                               |      |
+| child_id   | BIGINT       | FK → children(id), NOT NULL                      | 자녀 |
+| user_id    | UUID         | FK → users(id), NOT NULL                         | 부모 |
+| book_id    | BIGINT       | FK → books(id), NOT NULL                         | 도서 |
+| course_id  | INTEGER      | FK → courses(id)                                 | 미션이 속한 코스(옵션) |
+| is_manual_log | BOOLEAN   | NOT NULL DEFAULT FALSE                           | 추천이 아닌 직접 검색/수동 기록 여부 |
+| reaction   | VARCHAR(10)  | CHECK (reaction IN ('love','soso','hate'))       | 아이 반응 |
+| checklist  | JSONB        |                                                  | 미션 체크리스트 결과(옵션) |
+| logged_at  | TIMESTAMP    | NOT NULL DEFAULT NOW()                           | 읽은 시각 |
+| created_at | TIMESTAMP    | NOT NULL DEFAULT NOW()                           | 생성일시 |
+
+인덱스:
+- `INDEX (child_id, logged_at)`
+- `INDEX (book_id)`
+- `INDEX (course_id)`
+- `INDEX (reaction)`
+- `INDEX (child_id, book_id)`
+
+---
+
+#### 3.13 `child_bookshelf` (내 서재 – Read / Wish / Reading)
+
+| 컬럼명    | 타입         | 제약조건                                   | 설명 |
+|-----------|--------------|--------------------------------------------|------|
+| id        | SERIAL       | PK                                         |      |
+| child_id  | BIGINT       | FK → children(id), NOT NULL               | 자녀 |
+| book_id   | BIGINT       | FK → books(id), NOT NULL                  | 도서 |
+| status    | VARCHAR(20)  | CHECK (status IN ('read','wish','reading')) | 상태 |
+| updated_at| TIMESTAMP    | NOT NULL DEFAULT NOW()                    | 상태 변경 시각 |
+
+제약조건:
+- `UNIQUE (child_id, book_id)`
+
+---
+
+#### 3.14 `admin_users` (관리자 계정)
+
+| 컬럼명    | 타입         | 제약조건                | 설명 |
+|----------|--------------|-------------------------|------|
+| id       | UUID         | PK, NOT NULL           | Admin Auth ID |
+| email    | VARCHAR(255) | UNIQUE, NOT NULL       | 관리자 이메일 |
+| name     | VARCHAR(100) |                         | 관리자 이름 |
+| created_at | TIMESTAMP  | NOT NULL DEFAULT NOW() | 생성일시 |
+| updated_at | TIMESTAMP  | NOT NULL DEFAULT NOW() | 수정일시 |
+
+---
+
+### 4. 기능별 DB 매핑 요약
+
+- **온보딩(자녀 프로필 + 관심사 + 레벨 진단)**  
+  - `children` INSERT (`current_level_id`, `current_course_id` 세팅)  
+  - `child_interests`에 선택한 `theme_id`들 INSERT
+
+- **오늘의 미션 추천**  
+  - `children.current_level_id` → `levels`에서 AR 범위 조회  
+  - `child_interests` × `book_themes` 조인으로 관심사 매칭  
+  - `book_moods`로 분위기 필터  
+  - `mission_logs`에 없는 도서만 선택 (미읽음) 또는 UI에서 읽음/미읽음 구분  
+  - `course_books`의 `sequence_order`와 결합해 로드맵 기반 추천 구현
+
+- **스마트 검색 (AR × Theme × Mood)**  
+  - `books` JOIN `book_themes` JOIN `themes` + `book_moods` JOIN `moods`  
+  - AR 범위, 선택한 주제/분위기 조건으로 WHERE 필터  
+  - 인기순 정렬: `mission_logs`에서 `reaction = 'love'` count 기준
+
+- **미션 완료/리액션 기록 & 리포트**  
+  - `mission_logs`에 row INSERT (이벤트 로그)  
+  - 트리거나 백엔드 로직에서 `children.total_books_read`, `total_word_count`, `current_streak`, `longest_streak` 갱신  
+  - 리포트: `mission_logs` + `books.word_count` 집계로 월간/누적 통계 생성
+
+- **로드맵 시각화**  
+  - `course_books.sequence_order` 기반 도서 리스트 및 Current/Past/Future 구분  
+  - `child_course_progress.current_position`, `progress_percent`로 캐릭터 위치 표시
+
+- **Admin 도서 등록/수정 (P0)**  
+  - `books` 기본 정보 + AR + mom_tip + key_words[] + purchase_url 입력/수정  
+  - `book_themes`, `book_moods`에 태그 관계 저장  
+  - 추후 대시보드/유저 관리/검색 키워드 통계는 P1 이후로 확장
+
+
