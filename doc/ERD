@@ -23,7 +23,7 @@
   - `admin_users` (관리자 계정, 일반 사용자와 분리)
 
 - **자녀 / 레벨 / 코스 & 로드맵**
-  - `children` : 자녀 프로필 + 현재 레벨/코스 + 누적 통계
+  - `children` : 자녀 프로필 + 현재 레벨/코스 + 누적 통계 + 레벨 오버라이드 정보
   - `levels` : 레벨 그룹 정의 (예: Pre-K, AR 0~1, AR 1~2 …)
   - `courses` : 코스 정의 (예: 옐로우 코스)
   - `course_levels` : 코스 × 레벨별 목표/설정 (예: 옐로우 코스 + AR 0~1 = 흘려듣기 100시간)
@@ -38,19 +38,31 @@
   - `book_themes` : 도서 × 주제 태그 (N:M)
   - `book_moods` : 도서 × 분위기 태그 (N:M)
 
+- **온보딩 / 진단**
+  - `onboarding_questions` : 연령별 온보딩 질문 정의
+  - `question_options` : 질문 선택지 + 점수
+  - `onboarding_responses` : 자녀의 진단 응답 기록
+  - `level_thresholds` : 연령 그룹별 점수 구간 → 레벨 매핑
+  - `level_reassessments` : 재진단 기록 (옵션)
+
 - **미션 / 로그 / 통계 / 서재**
-  - `mission_logs` : 미션/자유 기록 이벤트 로그 (읽을 때마다 1 row)
+  - `mission_logs` : 미션/자유 기록 이벤트 로그 (읽을 때마다 1 row, 활동 유형 + 회독 횟수 포함)
   - `child_bookshelf` : 자녀 × 도서 상태 (Read / Wish / Reading)
 
 관계 요약:
 - `users (1) ── (N) children`
 - `children (N) ── (N) themes` via `child_interests`
+- `children (1) ── (N) onboarding_responses` (진단 응답)
+- `onboarding_questions (1) ── (N) question_options` (질문 선택지)
+- `onboarding_questions (1) ── (N) onboarding_responses` (질문 응답)
+- `question_options (1) ── (N) onboarding_responses` (선택한 옵션)
+- `levels (1) ── (N) level_thresholds` (레벨 점수 구간)
 - `books (N) ── (N) themes` via `book_themes`
 - `books (N) ── (N) moods` via `book_moods`
 - `courses (N) ── (N) books` via `course_books`
 - `children (N) ── (N) courses` via `child_course_progress`
 - `children (1) ── (N) mission_logs`
-- `books (1) ── (N) mission_logs`
+- `books (0..1) ── (N) mission_logs` (reading 활동일 때만 연결, video/듣기는 NULL)
 
 ---
 
@@ -85,6 +97,8 @@
 | longest_streak  | INTEGER      | NOT NULL DEFAULT 0                              | 최장 연속 학습일 |
 | total_books_read| INTEGER      | NOT NULL DEFAULT 0                              | 누적 읽은 권수 |
 | total_word_count| BIGINT       | NOT NULL DEFAULT 0                              | 누적 노출 단어 수 |
+| level_override_reason | TEXT    |                                                 | 부모가 레벨을 직접 설정한 이유(옵션) |
+| level_override_at | TIMESTAMP |                                                 | 레벨 직접 설정 시각(옵션) |
 | created_at      | TIMESTAMP    | NOT NULL DEFAULT NOW()                          | 생성일시 |
 | updated_at      | TIMESTAMP    | NOT NULL DEFAULT NOW()                          | 수정일시 |
 
@@ -247,18 +261,20 @@
 
 #### 3.12 `mission_logs` (미션/자유 기록 – 이벤트 로그)
 
-| 컬럼명      | 타입         | 제약조건                                         | 설명 |
-|------------|--------------|--------------------------------------------------|------|
-| id         | BIGSERIAL    | PK                                               |      |
-| child_id   | BIGINT       | FK → children(id), NOT NULL                      | 자녀 |
-| user_id    | UUID         | FK → users(id), NOT NULL                         | 부모 |
-| book_id    | BIGINT       | FK → books(id), NOT NULL                         | 도서 |
-| course_id  | INTEGER      | FK → courses(id)                                 | 미션이 속한 코스(옵션) |
-| is_manual_log | BOOLEAN   | NOT NULL DEFAULT FALSE                           | 추천이 아닌 직접 검색/수동 기록 여부 |
-| reaction   | VARCHAR(10)  | CHECK (reaction IN ('love','soso','hate'))       | 아이 반응 |
-| checklist  | JSONB        |                                                  | 미션 체크리스트 결과(옵션) |
-| logged_at  | TIMESTAMP    | NOT NULL DEFAULT NOW()                           | 읽은 시각 |
-| created_at | TIMESTAMP    | NOT NULL DEFAULT NOW()                           | 생성일시 |
+| 컬럼명         | 타입         | 제약조건                                         | 설명 |
+|----------------|--------------|--------------------------------------------------|------|
+| id             | BIGSERIAL    | PK                                               |      |
+| child_id       | BIGINT       | FK → children(id), NOT NULL                      | 자녀 |
+| user_id        | UUID         | FK → users(id), NOT NULL                         | 부모 |
+| book_id        | BIGINT       | FK → books(id)                                   | 도서 (NULL 가능: 영상/듣기 활동) |
+| course_id      | INTEGER      | FK → courses(id)                                 | 미션이 속한 코스(옵션) |
+| activity_type  | VARCHAR(30)  | CHECK (activity_type IN ('reading','video','focused_listening','background_listening')) NOT NULL | 활동 유형 |
+| read_count     | INTEGER      | NOT NULL DEFAULT 1                               | 해당 책을 몇 회독했는지 (같은 child_id + book_id 조합에서의 순번) |
+| is_manual_log  | BOOLEAN      | NOT NULL DEFAULT FALSE                           | 추천이 아닌 직접 검색/수동 기록 여부 |
+| reaction       | VARCHAR(10)  | CHECK (reaction IN ('love','soso','hate'))       | 아이 반응 |
+| checklist      | JSONB        |                                                  | 미션 체크리스트 결과(옵션) |
+| logged_at      | TIMESTAMP    | NOT NULL DEFAULT NOW()                           | 활동 시각 |
+| created_at     | TIMESTAMP    | NOT NULL DEFAULT NOW()                           | 생성일시 |
 
 인덱스:
 - `INDEX (child_id, logged_at)`
@@ -266,6 +282,12 @@
 - `INDEX (course_id)`
 - `INDEX (reaction)`
 - `INDEX (child_id, book_id)`
+- `INDEX (activity_type)`
+
+**참고:**
+- `read_count`는 같은 `child_id` + `book_id` 조합에서의 순번입니다. 예: 첫 번째 읽기=1, 두 번째 읽기=2
+- 백엔드 로직에서 INSERT 시 `(SELECT COALESCE(MAX(read_count), 0) + 1 FROM mission_logs WHERE child_id = ? AND book_id = ?)`로 계산
+- `activity_type`이 'video', 'focused_listening', 'background_listening'인 경우 `book_id`는 NULL일 수 있습니다
 
 ---
 
@@ -296,11 +318,101 @@
 
 ---
 
+#### 3.15 `onboarding_questions` (연령별 온보딩 질문 정의)
+
+| 컬럼명         | 타입         | 제약조건                | 설명 |
+|----------------|--------------|-------------------------|------|
+| id             | SERIAL       | PK                      | 질문 ID |
+| age_group      | VARCHAR(20)  | NOT NULL                | 연령 그룹: 'infant'(0~3세), 'preschool'(4~7세), 'lower_elem'(초1~3), 'upper_elem'(초4~6) |
+| question_code  | VARCHAR(50)  | UNIQUE, NOT NULL        | 질문 코드 (예: INFANT_AUDIO_EXPOSURE) |
+| question_text  | TEXT         | NOT NULL                | 질문 내용 |
+| question_order | INTEGER      | NOT NULL                | 질문 순서 |
+| created_at     | TIMESTAMP    | NOT NULL DEFAULT NOW()  | 생성일시 |
+
+인덱스:
+- `INDEX (age_group, question_order)`
+
+---
+
+#### 3.16 `question_options` (질문 선택지 + 점수)
+
+| 컬럼명        | 타입         | 제약조건                        | 설명 |
+|--------------|--------------|---------------------------------|------|
+| id           | SERIAL       | PK                               | 선택지 ID |
+| question_id  | INTEGER      | FK → onboarding_questions(id), NOT NULL | 질문 ID |
+| option_text  | TEXT         | NOT NULL                         | 선택지 텍스트 |
+| score        | INTEGER      | NOT NULL                         | 점수 (0~3점 스케일) |
+| option_order | INTEGER      | NOT NULL                         | 선택지 순서 |
+
+인덱스:
+- `INDEX (question_id)`
+
+---
+
+#### 3.17 `onboarding_responses` (자녀의 진단 응답 기록)
+
+| 컬럼명      | 타입         | 제약조건                        | 설명 |
+|------------|--------------|---------------------------------|------|
+| id         | BIGSERIAL    | PK                               | 응답 ID |
+| child_id   | BIGINT       | FK → children(id), NOT NULL     | 자녀 ID |
+| question_id| INTEGER      | FK → onboarding_questions(id), NOT NULL | 질문 ID |
+| option_id  | INTEGER      | FK → question_options(id), NOT NULL | 선택한 옵션 ID |
+| responded_at| TIMESTAMP   | NOT NULL DEFAULT NOW()           | 응답 시각 |
+
+인덱스:
+- `INDEX (child_id)`
+- `INDEX (question_id)`
+- `UNIQUE (child_id, question_id)` (한 질문에 한 번만 응답 가능)
+
+---
+
+#### 3.18 `level_thresholds` (연령 그룹별 점수 구간 → 레벨 매핑)
+
+| 컬럼명      | 타입         | 제약조건                        | 설명 |
+|------------|--------------|---------------------------------|------|
+| id         | SERIAL       | PK                               |      |
+| age_group  | VARCHAR(20)  | NOT NULL                         | 연령 그룹 |
+| level_id   | INTEGER      | FK → levels(id), NOT NULL       | 레벨 ID |
+| min_score  | INTEGER      | NOT NULL                         | 최소 점수 |
+| max_score  | INTEGER      | NOT NULL                         | 최대 점수 |
+
+제약조건:
+- `UNIQUE (age_group, level_id)`
+
+**점수 구간 예시:**
+- 0~3세: 총점 0~6점 (3문항 × 2점) → 0-1점=AGE_0, 2-3=AGE_1, 4-5=AGE_2, 6=AGE_3
+- 4~7세: 총점 0~11점 (4문항) → 0-3점=AGE_4, 4-7=AGE_5, 8-11=AGE_6
+- 초1~3: 총점 0~12점 (4문항) → 0-4점=GRADE_1, 5-8=GRADE_2, 9-12=GRADE_3
+- 초4~6: 총점 0~12점 (4문항) → 0-4점=GRADE_4, 5-8=GRADE_5, 9-12=GRADE_6
+
+---
+
+#### 3.19 `level_reassessments` (재진단 기록 - 옵션)
+
+| 컬럼명        | 타입         | 제약조건                        | 설명 |
+|--------------|--------------|---------------------------------|------|
+| id           | SERIAL       | PK                               |      |
+| child_id     | BIGINT       | FK → children(id), NOT NULL     | 자녀 ID |
+| old_level_id | INTEGER      | FK → levels(id)                  | 이전 레벨 |
+| new_level_id | INTEGER      | FK → levels(id)                  | 새 레벨 |
+| total_score  | INTEGER      |                                  | 총점 |
+| reassessed_at| TIMESTAMP    | NOT NULL DEFAULT NOW()           | 재진단 시각 |
+
+인덱스:
+- `INDEX (child_id, reassessed_at)`
+
+---
+
 ### 4. 기능별 DB 매핑 요약
 
-- **온보딩(자녀 프로필 + 관심사 + 레벨 진단)**  
-  - `children` INSERT (`current_level_id`, `current_course_id` 세팅)  
-  - `child_interests`에 선택한 `theme_id`들 INSERT
+- **온보딩(자녀 프로필 + 관심사 + 연령별 레벨 진단)**  
+  - `children` INSERT (기본 정보: nickname, birth_months, gender)  
+  - `child_interests`에 선택한 `theme_id`들 INSERT  
+  - **연령별 질문 조회**: `children.birth_months`로 `age_group` 결정 → `onboarding_questions`에서 해당 연령 그룹 질문 조회  
+  - **응답 저장**: `onboarding_responses`에 `child_id`, `question_id`, `option_id` 저장  
+  - **레벨 자동 계산**: `question_options.score` 합계 → `level_thresholds`에서 점수 구간에 맞는 `level_id` 찾기 → `children.current_level_id` 업데이트  
+  - **코스 배정**: 계산된 레벨에 맞는 기본 코스 할당 → `children.current_course_id` 업데이트  
+  - **부모 오버라이드**: 필요 시 `children.level_override_reason`, `level_override_at` 기록
 
 - **오늘의 미션 추천**  
   - `children.current_level_id` → `levels`에서 AR 범위 조회  
@@ -316,8 +428,12 @@
 
 - **미션 완료/리액션 기록 & 리포트**  
   - `mission_logs`에 row INSERT (이벤트 로그)  
+    - `activity_type`: 'reading', 'video', 'focused_listening', 'background_listening' 중 선택  
+    - `read_count`: 같은 `child_id` + `book_id` 조합에서의 순번 계산 (첫 번째=1, 두 번째=2, ...)  
+    - `book_id`: 활동 유형이 'reading'인 경우 필수, 그 외는 NULL 가능  
   - 트리거나 백엔드 로직에서 `children.total_books_read`, `total_word_count`, `current_streak`, `longest_streak` 갱신  
-  - 리포트: `mission_logs` + `books.word_count` 집계로 월간/누적 통계 생성
+  - 리포트: `mission_logs` + `books.word_count` 집계로 월간/누적 통계 생성  
+  - **회독 횟수 조회**: `SELECT COUNT(*) FROM mission_logs WHERE child_id = ? AND book_id = ?` 또는 `MAX(read_count)` 사용
 
 - **로드맵 시각화**  
   - `course_books.sequence_order` 기반 도서 리스트 및 Current/Past/Future 구분  
@@ -327,5 +443,154 @@
   - `books` 기본 정보 + AR + mom_tip + key_words[] + purchase_url 입력/수정  
   - `book_themes`, `book_moods`에 태그 관계 저장  
   - 추후 대시보드/유저 관리/검색 키워드 통계는 P1 이후로 확장
+
+---
+
+### 5. 레벨 계산 알고리즘
+
+#### 5.1 연령 그룹 결정
+```sql
+-- children.birth_months 기준으로 age_group 결정
+CASE
+  WHEN birth_months < 48 THEN 'infant'        -- 0~3세
+  WHEN birth_months < 84 THEN 'preschool'     -- 4~6세
+  WHEN birth_months < 120 THEN 'lower_elem'   -- 초1~3
+  ELSE 'upper_elem'                            -- 초4~6
+END
+```
+
+#### 5.2 점수 계산 및 레벨 매핑
+1. **응답 점수 합계**: `onboarding_responses` JOIN `question_options` → `SUM(score)`
+2. **레벨 찾기**: `level_thresholds`에서 `age_group` + 점수 구간에 맞는 `level_id` 조회
+3. **자녀 레벨 업데이트**: `children.current_level_id` = 계산된 레벨
+4. **기본 코스 배정**: 레벨에 맞는 기본 코스 할당 → `children.current_course_id`
+
+#### 5.3 재진단 기능
+- 마지막 진단 후 3개월 경과 시 재진단 제안
+- `level_reassessments`에 이전/새 레벨 기록
+- 기존 `onboarding_responses`는 보존 (성장 추적용)
+
+---
+
+### 6. 핵심 쿼리 예시
+
+#### 6.1 오늘의 미션 추천 (Rule-based)
+```sql
+-- 자녀의 레벨 ±0.5 범위 + 관심사 매칭 + 미읽음 필터
+WITH child_info AS (
+  SELECT c.id, c.current_level_id, l.min_ar, l.max_ar
+  FROM children c
+  JOIN levels l ON c.current_level_id = l.id
+  WHERE c.id = :child_id
+),
+child_interests_list AS (
+  SELECT theme_id FROM child_interests WHERE child_id = :child_id
+)
+SELECT DISTINCT b.*
+FROM books b
+JOIN book_themes bt ON b.id = bt.book_id
+JOIN child_interests_list cil ON bt.theme_id = cil.theme_id
+JOIN child_info ci ON b.ar_level BETWEEN GREATEST(ci.min_ar - 0.5, 0) AND ci.max_ar + 0.5
+WHERE NOT EXISTS (
+  SELECT 1 FROM mission_logs ml
+  WHERE ml.child_id = :child_id AND ml.book_id = b.id
+)
+ORDER BY RANDOM()
+LIMIT 1;
+```
+
+#### 6.2 미션 로그 INSERT (회독 횟수 자동 계산)
+```sql
+-- read_count 자동 계산 후 INSERT
+INSERT INTO mission_logs (
+  child_id, user_id, book_id, course_id,
+  activity_type, read_count, reaction, logged_at
+)
+SELECT
+  :child_id,
+  :user_id,
+  :book_id,
+  :course_id,
+  :activity_type,
+  COALESCE(MAX(read_count), 0) + 1,  -- 회독 횟수 자동 증가
+  :reaction,
+  NOW()
+FROM mission_logs
+WHERE child_id = :child_id AND book_id = :book_id;
+```
+
+#### 6.3 연령별 온보딩 질문 조회
+```sql
+-- 자녀 나이에 맞는 질문 + 선택지 조회
+WITH child_age_group AS (
+  SELECT
+    CASE
+      WHEN birth_months < 48 THEN 'infant'
+      WHEN birth_months < 84 THEN 'preschool'
+      WHEN birth_months < 120 THEN 'lower_elem'
+      ELSE 'upper_elem'
+    END as age_group
+  FROM children
+  WHERE id = :child_id
+)
+SELECT
+  oq.id as question_id,
+  oq.question_text,
+  oq.question_order,
+  json_agg(
+    json_build_object(
+      'option_id', qo.id,
+      'option_text', qo.option_text,
+      'score', qo.score,
+      'option_order', qo.option_order
+    ) ORDER BY qo.option_order
+  ) as options
+FROM onboarding_questions oq
+JOIN question_options qo ON oq.id = qo.question_id
+JOIN child_age_group cag ON oq.age_group = cag.age_group
+GROUP BY oq.id, oq.question_text, oq.question_order
+ORDER BY oq.question_order;
+```
+
+#### 6.4 레벨 자동 계산 함수 (PostgreSQL)
+```sql
+CREATE OR REPLACE FUNCTION calculate_child_level(p_child_id BIGINT)
+RETURNS INTEGER AS $$
+DECLARE
+  v_birth_months INTEGER;
+  v_age_group VARCHAR(20);
+  v_total_score INTEGER;
+  v_level_id INTEGER;
+BEGIN
+  -- 1. 자녀 나이 가져오기
+  SELECT birth_months INTO v_birth_months FROM children WHERE id = p_child_id;
+  
+  -- 2. 연령 그룹 결정
+  v_age_group := CASE
+    WHEN v_birth_months < 48 THEN 'infant'
+    WHEN v_birth_months < 84 THEN 'preschool'
+    WHEN v_birth_months < 120 THEN 'lower_elem'
+    ELSE 'upper_elem'
+  END;
+  
+  -- 3. 응답 점수 합계 계산
+  SELECT COALESCE(SUM(qo.score), 0) INTO v_total_score
+  FROM onboarding_responses or_table
+  JOIN question_options qo ON or_table.option_id = qo.id
+  JOIN onboarding_questions oq ON qo.question_id = oq.id
+  WHERE or_table.child_id = p_child_id
+    AND oq.age_group = v_age_group;
+  
+  -- 4. 점수 구간에 맞는 레벨 찾기
+  SELECT level_id INTO v_level_id
+  FROM level_thresholds
+  WHERE age_group = v_age_group
+    AND v_total_score BETWEEN min_score AND max_score
+  LIMIT 1;
+  
+  RETURN v_level_id;
+END;
+$$ LANGUAGE plpgsql;
+```
 
 

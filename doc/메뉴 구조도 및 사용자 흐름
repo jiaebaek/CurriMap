@@ -1,3 +1,5 @@
+메뉴 구조도 (IA) 및 사용자 흐름 정의 (User Flow)
+
 **1. 앱 메뉴 구조도 (Information Architecture - IA)**
 앱의 최상위 네비게이션(Bottom Tab Bar)을 기준으로 화면의 깊이(Depth)를 정의합니다.
 
