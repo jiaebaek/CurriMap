@@ -17,6 +17,7 @@ const OnboardingScreen = () => {
   const navigation = useNavigation();
   const [step, setStep] = useState(1);
   const [childId, setChildId] = useState(null);
+  const [loading, setLoading] = useState(false);
   
   // Step 1: 자녀 프로필
   const [nickname, setNickname] = useState('');
@@ -64,16 +65,79 @@ const OnboardingScreen = () => {
       return;
     }
 
+    // 사용자 인증 상태 확인
+    if (!user) {
+      Alert.alert('오류', '로그인이 필요합니다. 먼저 로그인해주세요.');
+      navigation.navigate('Auth');
+      return;
+    }
+
+    setLoading(true);
     try {
+      console.log('📝 [Onboarding] Creating child profile...');
+      console.log('   Nickname:', nickname);
+      console.log('   Birth months:', birthMonths);
+      console.log('   Gender:', gender || 'null');
+      
       const data = await post('/children', {
         nickname,
         birth_months: parseInt(birthMonths),
         gender: gender || null,
       });
-      setChildId(data.data.id);
-      setStep(2);
+      
+      console.log('✅ [Onboarding] Child profile created');
+      console.log('   Response:', JSON.stringify(data, null, 2));
+      
+      // 응답 구조 확인 및 안전하게 접근
+      // 백엔드가 createSuccessResponse를 사용하므로 data.data에 실제 데이터가 있음
+      let childIdValue = null;
+      
+      if (data && data.data) {
+        // data.data가 배열인 경우 (createSuccessResponse가 배열을 감싼 경우)
+        if (Array.isArray(data.data) && data.data.length > 0) {
+          childIdValue = data.data[0].id;
+        } 
+        // data.data가 객체인 경우
+        else if (data.data.id) {
+          childIdValue = data.data.id;
+        }
+        // data.data가 직접 id를 가진 경우
+        else if (data.data.child_id) {
+          childIdValue = data.data.child_id;
+        }
+      }
+      
+      if (childIdValue) {
+        console.log('✅ [Onboarding] Child ID:', childIdValue);
+        setChildId(childIdValue);
+        setStep(2);
+      } else {
+        console.error('❌ [Onboarding] Unexpected response structure:', data);
+        Alert.alert('오류', `응답 형식이 올바르지 않습니다.\n\n응답: ${JSON.stringify(data)}`);
+      }
     } catch (error) {
-      Alert.alert('오류', error.message || '자녀 프로필 생성에 실패했습니다.');
+      console.error('❌ [Onboarding] Error creating child profile:', error);
+      console.error('   Error details:', JSON.stringify(error, null, 2));
+      
+      // 인증 에러인 경우 특별 처리
+      if (error.message && (error.message.includes('Unauthorized') || error.message.includes('401'))) {
+        Alert.alert(
+          '인증 오류', 
+          '로그인이 필요합니다. 다시 로그인해주세요.',
+          [
+            {
+              text: '로그인하기',
+              onPress: () => navigation.navigate('Auth'),
+            },
+          ]
+        );
+      } else {
+        const errorMessage = error.message || '자녀 프로필 생성에 실패했습니다.';
+        console.error('   Error message:', errorMessage);
+        Alert.alert('오류', errorMessage);
+      }
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -83,13 +147,23 @@ const OnboardingScreen = () => {
       return;
     }
 
+    setLoading(true);
     try {
+      console.log('📝 [Onboarding] Saving interests...');
+      console.log('   Child ID:', childId);
+      console.log('   Selected themes:', selectedThemes);
+      
       await post(`/children/${childId}/interests`, {
         theme_ids: selectedThemes,
       });
+      
+      console.log('✅ [Onboarding] Interests saved, moving to step 3');
       setStep(3);
     } catch (error) {
+      console.error('❌ [Onboarding] Error saving interests:', error);
       Alert.alert('오류', error.message || '관심사 저장에 실패했습니다.');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -182,8 +256,14 @@ const OnboardingScreen = () => {
             ))}
           </View>
 
-          <TouchableOpacity style={styles.button} onPress={handleStep1Submit}>
-            <Text style={styles.buttonText}>다음</Text>
+          <TouchableOpacity 
+            style={[styles.button, loading && styles.buttonDisabled]} 
+            onPress={handleStep1Submit}
+            disabled={loading}
+          >
+            <Text style={styles.buttonText}>
+              {loading ? '처리 중...' : '다음'}
+            </Text>
           </TouchableOpacity>
         </View>
       </ScrollView>
@@ -220,8 +300,14 @@ const OnboardingScreen = () => {
             ))}
           </View>
 
-          <TouchableOpacity style={styles.button} onPress={handleStep2Submit}>
-            <Text style={styles.buttonText}>다음</Text>
+          <TouchableOpacity 
+            style={[styles.button, loading && styles.buttonDisabled]} 
+            onPress={handleStep2Submit}
+            disabled={loading}
+          >
+            <Text style={styles.buttonText}>
+              {loading ? '처리 중...' : '다음'}
+            </Text>
           </TouchableOpacity>
         </View>
       </ScrollView>
@@ -389,6 +475,9 @@ const styles = StyleSheet.create({
     padding: 16,
     alignItems: 'center',
     marginTop: 24,
+  },
+  buttonDisabled: {
+    opacity: 0.5,
   },
   buttonText: {
     color: '#ffffff',

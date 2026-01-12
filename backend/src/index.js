@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
+import { requestLogger, errorLogger } from './middleware/logger.js';
 
 // Routes
 import authRoutes from './routes/auth.js';
@@ -26,6 +27,9 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Request logging (모든 요청 로깅)
+app.use(requestLogger);
+
 // Health check
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
@@ -43,12 +47,23 @@ app.use('/api/admin', adminRoutes);
 
 // Error handling
 app.use(notFoundHandler);
-app.use(errorHandler);
+app.use(errorLogger); // 에러 로깅 (에러 핸들러 전에)
+app.use(errorHandler); // 에러 응답 처리
 
 // Start server
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
+// 0.0.0.0으로 바인딩하여 모든 네트워크 인터페이스에서 접근 가능하도록 설정
+app.listen(PORT, '0.0.0.0', () => {
+  console.log('\n' + '='.repeat(80));
+  console.log('🚀 백엔드 서버가 시작되었습니다!');
+  console.log('='.repeat(80));
+  console.log(`📍 Port: ${PORT}`);
   console.log(`📝 Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`🌐 Health Check: http://localhost:${PORT}/health`);
+  console.log(`🔗 API Base URL: http://localhost:${PORT}/api`);
+  console.log(`🌍 Network Access: http://0.0.0.0:${PORT}/api`);
+  console.log('='.repeat(80));
+  console.log('💡 모든 요청과 응답이 로깅됩니다.');
+  console.log('💡 모든 네트워크 인터페이스에서 접근 가능합니다.\n');
 });
 
 export default app;

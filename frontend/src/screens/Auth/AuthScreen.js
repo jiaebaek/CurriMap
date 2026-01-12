@@ -29,15 +29,48 @@ const AuthScreen = () => {
     setLoading(true);
     try {
       if (isSignUp) {
-        await signUp(email, password);
-        Alert.alert('성공', '회원가입이 완료되었습니다.');
-        // 온보딩 화면으로 이동
-        navigation.navigate('Onboarding');
+        const result = await signUp(email, password);
+        // 회원가입 성공 후 세션이 있으면 온보딩으로 이동
+        if (result.session) {
+          Alert.alert('성공', '회원가입이 완료되었습니다.');
+          // AuthContext의 상태 업데이트로 AppNavigator가 자동으로 전환됨
+          // 하지만 명시적으로 온보딩으로 이동
+          navigation.navigate('Onboarding');
+        } else {
+          // 이메일 확인이 필요한 경우
+          Alert.alert(
+            '이메일 확인 필요',
+            '회원가입이 완료되었습니다. 이메일을 확인해주세요.'
+          );
+        }
       } else {
+        // 로그인
         await signIn(email, password);
+        // AuthContext의 상태 업데이트로 AppNavigator가 자동으로 MainTabs로 전환됨
+        // 명시적인 네비게이션은 필요 없음
       }
     } catch (error) {
-      Alert.alert('오류', error.message || '인증에 실패했습니다.');
+      console.error('❌ [Auth] Auth error:', error);
+      let errorMessage = '인증에 실패했습니다.';
+      
+      // Supabase 에러 메시지 처리
+      if (error.code === 'invalid_credentials' || error.message?.includes('Invalid login credentials')) {
+        // 이메일 확인이 안 된 경우일 가능성이 높음
+        errorMessage = `로그인에 실패했습니다.\n\n입력한 이메일: ${email}\n\n가능한 원인:\n1. 이메일 확인이 필요합니다\n   → Supabase 대시보드에서 이메일 확인을 비활성화하거나\n   → 이메일 받은편지함에서 인증 링크를 클릭하세요\n\n2. 비밀번호가 올바르지 않습니다\n   → 회원가입 시 사용한 비밀번호를 확인하세요\n\n3. 회원가입이 완료되지 않았습니다\n   → 회원가입 화면에서 다시 시도하세요\n\n💡 빠른 해결 방법 (개발 환경):\nSupabase 대시보드 → Authentication → Settings\n→ "Enable email confirmations" 비활성화`;
+      } else if (error.message?.includes('Email not confirmed')) {
+        errorMessage = '이메일 인증이 완료되지 않았습니다.\n이메일을 확인하여 인증 링크를 클릭해주세요.';
+      } else if (error.message?.includes('User already registered')) {
+        errorMessage = '이미 등록된 이메일입니다.';
+      } else if (error.message?.includes('Password')) {
+        errorMessage = '비밀번호가 올바르지 않습니다.';
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+      
+      // 디버깅을 위한 추가 정보
+      console.log('❌ [Auth] Full error object:', JSON.stringify(error, null, 2));
+      
+      Alert.alert('오류', errorMessage);
     } finally {
       setLoading(false);
     }

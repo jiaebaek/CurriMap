@@ -54,8 +54,10 @@ const MainTabs = () => {
 const AppNavigator = () => {
   const { user, loading } = useAuth();
 
+  // 세션 로딩 중에는 아무것도 렌더링하지 않음
+  // (또는 로딩 스크린을 표시할 수 있음)
   if (loading) {
-    return null; // 또는 로딩 스크린
+    return null;
   }
 
   return (
@@ -84,6 +86,7 @@ const AppNavigator = () => {
               component={ReportScreen}
               options={{ presentation: 'card' }}
             />
+            <Stack.Screen name="Onboarding" component={OnboardingScreen} />
           </>
         )}
       </Stack.Navigator>
