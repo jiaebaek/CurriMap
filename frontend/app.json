@@ -20,8 +20,7 @@
       "adaptiveIcon": {
         "backgroundColor": "#ffffff"
       },
-      "package": "com.currimap.app",
-      "permissions": []
+      "package": "com.currimap.app"
     },
     "web": {}
   }

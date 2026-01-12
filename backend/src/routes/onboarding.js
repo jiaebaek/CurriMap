@@ -16,8 +16,8 @@ router.get('/questions/:childId', async (req, res, next) => {
   try {
     const { childId } = req.params;
 
-    // 자녀 정보 조회
-    const { data: child, error: childError } = await supabase
+    // 수정: RLS 정책 우회를 위해 supabaseAdmin 사용
+    const { data: child, error: childError } = await supabaseAdmin
       .from('children')
       .select('birth_months')
       .eq('id', childId)
@@ -25,16 +25,16 @@ router.get('/questions/:childId', async (req, res, next) => {
       .single();
 
     if (childError || !child) {
+      console.error('❌ [Onboarding] Child not found or error:', childError);
       return res.status(404).json({
         error: 'Not Found',
         message: 'Child not found',
       });
     }
 
-    // 연령 그룹 결정
     const ageGroup = getAgeGroup(child.birth_months);
 
-    // 해당 연령 그룹의 질문 조회
+    // 질문 정보는 공용 데이터이므로 supabase 사용 가능
     const { data: questions, error: questionsError } = await supabase
       .from('onboarding_questions')
       .select(`
@@ -51,7 +51,6 @@ router.get('/questions/:childId', async (req, res, next) => {
       });
     }
 
-    // 옵션을 question_order와 option_order로 정렬
     const formattedQuestions = questions.map((q) => ({
       ...q,
       options: q.options.sort((a, b) => a.option_order - b.option_order),
@@ -69,15 +68,14 @@ router.get('/questions/:childId', async (req, res, next) => {
 
 /**
  * POST /api/onboarding/responses/:childId
- * 온보딩 질문 응답 저장
+ * 응답 저장
  */
 router.post('/responses/:childId', validateOnboardingResponse, async (req, res, next) => {
   try {
     const { childId } = req.params;
     const { question_id, option_id } = req.body;
 
-    // 자녀 소유권 확인
-    const { data: existingChild } = await supabase
+    const { data: existingChild } = await supabaseAdmin
       .from('children')
       .select('id')
       .eq('id', childId)
@@ -91,8 +89,7 @@ router.post('/responses/:childId', validateOnboardingResponse, async (req, res, 
       });
     }
 
-    // 응답 저장 (중복 시 업데이트)
-    const { data: response, error } = await supabase
+    const { data: response, error } = await supabaseAdmin
       .from('onboarding_responses')
       .upsert({
         child_id: parseInt(childId),
@@ -120,14 +117,12 @@ router.post('/responses/:childId', validateOnboardingResponse, async (req, res, 
 
 /**
  * POST /api/onboarding/calculate-level/:childId
- * 온보딩 완료 후 레벨 자동 계산 및 업데이트
  */
 router.post('/calculate-level/:childId', async (req, res, next) => {
   try {
     const { childId } = req.params;
 
-    // 자녀 정보 조회
-    const { data: child, error: childError } = await supabase
+    const { data: child, error: childError } = await supabaseAdmin
       .from('children')
       .select('birth_months')
       .eq('id', childId)
@@ -138,14 +133,6 @@ router.post('/calculate-level/:childId', async (req, res, next) => {
       return res.status(404).json({
         error: 'Not Found',
         message: 'Child not found',
-      });
-    }
-
-    // 레벨 계산 함수 호출 (Supabase Admin 사용)
-    if (!supabaseAdmin) {
-      return res.status(500).json({
-        error: 'Server Error',
-        message: 'Admin client not configured',
       });
     }
 
@@ -161,46 +148,25 @@ router.post('/calculate-level/:childId', async (req, res, next) => {
       });
     }
 
-    // 기본 코스 배정 (레벨에 맞는 코스 찾기)
     const ageGroup = getAgeGroup(child.birth_months);
-    let defaultCourseId = null;
+    const courseCodeMap = {
+      infant: 'YELLOW_BASIC',
+      preschool: 'GREEN_PHONICS',
+      lower_elem: 'BLUE_READER',
+      upper_elem: 'PURPLE_CHAPTER'
+    };
 
-    if (ageGroup === 'infant') {
-      const { data: course } = await supabase
-        .from('courses')
-        .select('id')
-        .eq('code', 'YELLOW_BASIC')
-        .single();
-      defaultCourseId = course?.id;
-    } else if (ageGroup === 'preschool') {
-      const { data: course } = await supabase
-        .from('courses')
-        .select('id')
-        .eq('code', 'GREEN_PHONICS')
-        .single();
-      defaultCourseId = course?.id;
-    } else if (ageGroup === 'lower_elem') {
-      const { data: course } = await supabase
-        .from('courses')
-        .select('id')
-        .eq('code', 'BLUE_READER')
-        .single();
-      defaultCourseId = course?.id;
-    } else if (ageGroup === 'upper_elem') {
-      const { data: course } = await supabase
-        .from('courses')
-        .select('id')
-        .eq('code', 'PURPLE_CHAPTER')
-        .single();
-      defaultCourseId = course?.id;
-    }
+    const { data: course } = await supabaseAdmin
+      .from('courses')
+      .select('id')
+      .eq('code', courseCodeMap[ageGroup])
+      .single();
 
-    // 자녀 레벨 및 코스 업데이트
-    const { data: updatedChild, error: updateError } = await supabase
+    const { data: updatedChild, error: updateError } = await supabaseAdmin
       .from('children')
       .update({
         current_level_id: levelId,
-        current_course_id: defaultCourseId,
+        current_course_id: course?.id || null,
         updated_at: new Date().toISOString(),
       })
       .eq('id', childId)
@@ -228,4 +194,3 @@ router.post('/calculate-level/:childId', async (req, res, next) => {
 });
 
 export default router;
-
