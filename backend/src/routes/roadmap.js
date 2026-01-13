@@ -1,5 +1,5 @@
 import express from 'express';
-import { supabase } from '../config/supabase.js';
+import { supabaseAdmin } from '../config/supabase.js';
 import { authenticateUser } from '../middleware/auth.js';
 import { createSuccessResponse } from '../utils/helpers.js';
 
@@ -16,7 +16,7 @@ router.get('/:childId', async (req, res, next) => {
     const { childId } = req.params;
 
     // 자녀 정보 및 현재 코스 조회
-    const { data: child, error: childError } = await supabase
+    const { data: child, error: childError } = await supabaseAdmin
       .from('children')
       .select(`
         *,
@@ -43,7 +43,7 @@ router.get('/:childId', async (req, res, next) => {
     }
 
     // 코스 내 도서 리스트 조회
-    const { data: courseBooks, error: booksError } = await supabase
+    const { data: courseBooks, error: booksError } = await supabaseAdmin
       .from('course_books')
       .select(`
         *,
@@ -61,7 +61,7 @@ router.get('/:childId', async (req, res, next) => {
     }
 
     // 읽은 책 ID 조회
-    const { data: readLogs } = await supabase
+    const { data: readLogs } = await supabaseAdmin
       .from('mission_logs')
       .select('book_id')
       .eq('child_id', childId)
@@ -109,7 +109,7 @@ router.get('/:childId/level/:levelId', async (req, res, next) => {
     const { childId, levelId } = req.params;
 
     // 자녀 소유권 확인
-    const { data: child } = await supabase
+    const { data: child } = await supabaseAdmin
       .from('children')
       .select('id')
       .eq('id', childId)
@@ -124,7 +124,7 @@ router.get('/:childId/level/:levelId', async (req, res, next) => {
     }
 
     // 해당 레벨의 도서 조회
-    const { data: books, error } = await supabase
+    const { data: books, error } = await supabaseAdmin
       .from('course_books')
       .select(`
         *,
@@ -148,4 +148,3 @@ router.get('/:childId/level/:levelId', async (req, res, next) => {
 });
 
 export default router;
-

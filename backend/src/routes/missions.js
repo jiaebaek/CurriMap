@@ -1,5 +1,5 @@
 import express from 'express';
-import { supabase } from '../config/supabase.js';
+import { supabaseAdmin } from '../config/supabase.js';
 import { authenticateUser } from '../middleware/auth.js';
 import { validateMissionComplete } from '../utils/validators.js';
 import { createSuccessResponse } from '../utils/helpers.js';
@@ -17,7 +17,7 @@ router.post('/complete', validateMissionComplete, async (req, res, next) => {
     const { child_id, book_id, activity_type, reaction, course_id, checklist, is_manual_log } = req.body;
 
     // 자녀 소유권 확인
-    const { data: child } = await supabase
+    const { data: child } = await supabaseAdmin
       .from('children')
       .select('id')
       .eq('id', child_id)
@@ -40,7 +40,7 @@ router.post('/complete', validateMissionComplete, async (req, res, next) => {
     }
 
     // 미션 로그 저장 (read_count는 트리거가 자동 설정)
-    const { data: missionLog, error } = await supabase
+    const { data: missionLog, error } = await supabaseAdmin
       .from('mission_logs')
       .insert({
         child_id: parseInt(child_id),
@@ -80,7 +80,7 @@ router.get('/:childId/history', async (req, res, next) => {
     const { limit = 50, offset = 0 } = req.query;
 
     // 자녀 소유권 확인
-    const { data: child } = await supabase
+    const { data: child } = await supabaseAdmin
       .from('children')
       .select('id')
       .eq('id', childId)
@@ -94,7 +94,7 @@ router.get('/:childId/history', async (req, res, next) => {
       });
     }
 
-    const { data: logs, error } = await supabase
+    const { data: logs, error } = await supabaseAdmin
       .from('mission_logs')
       .select(`
         *,
@@ -126,7 +126,7 @@ router.get('/:childId/stats', async (req, res, next) => {
     const { childId } = req.params;
 
     // 자녀 소유권 확인
-    const { data: child } = await supabase
+    const { data: child } = await supabaseAdmin
       .from('children')
       .select('id, total_books_read, total_word_count, current_streak, longest_streak')
       .eq('id', childId)
@@ -145,7 +145,7 @@ router.get('/:childId/stats', async (req, res, next) => {
     startOfMonth.setDate(1);
     startOfMonth.setHours(0, 0, 0, 0);
 
-    const { count: monthlyCount } = await supabase
+    const { count: monthlyCount } = await supabaseAdmin
       .from('mission_logs')
       .select('*', { count: 'exact', head: true })
       .eq('child_id', childId)
@@ -164,4 +164,3 @@ router.get('/:childId/stats', async (req, res, next) => {
 });
 
 export default router;
-

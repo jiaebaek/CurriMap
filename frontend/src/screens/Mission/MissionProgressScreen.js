@@ -1,166 +1,118 @@
 import React, { useState } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
-  Alert,
-} from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Alert, ActivityIndicator, Platform } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
 import { post } from '../../config/api';
-import { useNavigation, useRoute } from '@react-navigation/native';
 
-const MissionProgressScreen = () => {
+const MissionProgressScreen = ({ route }) => {
   const navigation = useNavigation();
-  const route = useRoute();
   const { bookId, childId } = route.params;
-  const [reaction, setReaction] = useState(null);
-  const [submitting, setSubmitting] = useState(false);
+  const [loading, setLoading] = useState(false);
 
-  const handleComplete = async () => {
-    if (!reaction) {
-      Alert.alert('알림', '아이의 반응을 선택해주세요.');
-      return;
-    }
+  // 미션 완료 처리 함수
+  const handleComplete = async (reactionValue) => {
+    if (loading) return; // 중복 클릭 방지
+    setLoading(true);
 
-    setSubmitting(true);
     try {
-      await post('/missions/complete', {
+      // 3단계 반응(love, soso, hate)과 필수 활동 유형(reading) 전송
+      const response = await post('/missions/complete', {
         child_id: childId,
         book_id: bookId,
         activity_type: 'reading',
-        reaction,
+        reaction: reactionValue, 
       });
 
-      Alert.alert('완료', '미션이 완료되었습니다!', [
-        {
-          text: '확인',
-          onPress: () => navigation.goBack(),
-        },
-      ]);
+      if (response.data) {
+        // 웹 환경에서는 Alert가 로직을 방해할 수 있으므로 즉시 이동하거나 브라우저 알림 사용
+        if (Platform.OS === 'web') {
+          // 웹일 경우 브라우저 기본 alert 사용 후 즉시 이동
+          alert('참 잘했어요! 오늘 독서 미션을 완료했습니다. 🎉');
+          navigation.navigate('Home');
+        } else {
+          // 모바일 환경일 경우 기존 Alert.alert 사용
+          Alert.alert('참 잘했어요! 🎉', '오늘의 독서 기록이 저장되었습니다.', [
+            { text: '확인', onPress: () => navigation.navigate('Home') }
+          ]);
+        }
+      }
     } catch (error) {
-      Alert.alert('오류', error.message || '미션 완료에 실패했습니다.');
+      console.error('❌ [Mission] Complete error:', error);
+      const errorMsg = error.message || '데이터 저장 중 문제가 발생했습니다.';
+      if (Platform.OS === 'web') alert(errorMsg);
+      else Alert.alert('오류', errorMsg);
     } finally {
-      setSubmitting(false);
+      setLoading(false);
     }
   };
 
   return (
-    <ScrollView style={styles.container}>
-      <View style={styles.content}>
-        <Text style={styles.title}>미션 완료</Text>
-        <Text style={styles.subtitle}>
-          아이가 이 책을 좋아했나요?
-        </Text>
+    <View style={styles.container}>
+      <Text style={styles.title}>책을 다 읽었나요? 📖</Text>
+      <Text style={styles.subtitle}>오늘 읽은 책이 어땠는지 알려주세요!</Text>
 
-        <View style={styles.reactionContainer}>
-          <TouchableOpacity
-            style={[
-              styles.reactionButton,
-              reaction === 'love' && styles.reactionButtonSelected,
-            ]}
-            onPress={() => setReaction('love')}
-          >
-            <Text style={styles.reactionEmoji}>😍</Text>
-            <Text style={styles.reactionText}>좋아요</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[
-              styles.reactionButton,
-              reaction === 'soso' && styles.reactionButtonSelected,
-            ]}
-            onPress={() => setReaction('soso')}
-          >
-            <Text style={styles.reactionEmoji}>🙂</Text>
-            <Text style={styles.reactionText}>보통</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[
-              styles.reactionButton,
-              reaction === 'hate' && styles.reactionButtonSelected,
-            ]}
-            onPress={() => setReaction('hate')}
-          >
-            <Text style={styles.reactionEmoji}>☹️</Text>
-            <Text style={styles.reactionText}>별로</Text>
-          </TouchableOpacity>
-        </View>
-
-        <TouchableOpacity
-          style={[styles.completeButton, submitting && styles.completeButtonDisabled]}
-          onPress={handleComplete}
-          disabled={submitting}
+      <View style={styles.reactionGrid}>
+        {/* 'love' 반응 */}
+        <TouchableOpacity 
+          style={[styles.reactionButton, loading && styles.disabledButton]} 
+          onPress={() => handleComplete('love')}
+          disabled={loading}
         >
-          <Text style={styles.completeButtonText}>
-            {submitting ? '처리 중...' : '완료하기'}
-          </Text>
+          <Text style={styles.emoji}>😍</Text>
+          <Text style={styles.reactionLabel}>최고예요</Text>
+        </TouchableOpacity>
+
+        {/* 'soso' 반응 */}
+        <TouchableOpacity 
+          style={[styles.reactionButton, loading && styles.disabledButton]} 
+          onPress={() => handleComplete('soso')}
+          disabled={loading}
+        >
+          <Text style={styles.emoji}>🙂</Text>
+          <Text style={styles.reactionLabel}>그저 그래요</Text>
+        </TouchableOpacity>
+
+        {/* 'hate' 반응 */}
+        <TouchableOpacity 
+          style={[styles.reactionButton, loading && styles.disabledButton]} 
+          onPress={() => handleComplete('hate')}
+          disabled={loading}
+        >
+          <Text style={styles.emoji}>☹️</Text>
+          <Text style={styles.reactionLabel}>별로예요</Text>
         </TouchableOpacity>
       </View>
-    </ScrollView>
+
+      {loading && (
+        <View style={styles.loaderContainer}>
+          <ActivityIndicator size="large" color="#6366f1" />
+          <Text style={styles.loaderText}>기록을 저장하고 있어요...</Text>
+        </View>
+      )}
+
+      <TouchableOpacity 
+        style={styles.closeButton} 
+        onPress={() => navigation.goBack()}
+        disabled={loading}
+      >
+        <Text style={styles.closeButtonText}>나중에 할게요</Text>
+      </TouchableOpacity>
+    </View>
   );
 };
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#ffffff',
-  },
-  content: {
-    padding: 24,
-  },
-  title: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#111827',
-    marginBottom: 8,
-  },
-  subtitle: {
-    fontSize: 16,
-    color: '#6b7280',
-    marginBottom: 32,
-  },
-  reactionContainer: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    marginBottom: 32,
-  },
-  reactionButton: {
-    alignItems: 'center',
-    padding: 16,
-    borderRadius: 12,
-    borderWidth: 2,
-    borderColor: '#e5e7eb',
-    minWidth: 100,
-  },
-  reactionButtonSelected: {
-    borderColor: '#6366f1',
-    backgroundColor: '#eef2ff',
-  },
-  reactionEmoji: {
-    fontSize: 48,
-    marginBottom: 8,
-  },
-  reactionText: {
-    fontSize: 14,
-    color: '#6b7280',
-  },
-  completeButton: {
-    backgroundColor: '#6366f1',
-    borderRadius: 8,
-    padding: 16,
-    alignItems: 'center',
-  },
-  completeButtonDisabled: {
-    opacity: 0.5,
-  },
-  completeButtonText: {
-    color: '#ffffff',
-    fontSize: 16,
-    fontWeight: '600',
-  },
+  container: { flex: 1, backgroundColor: '#ffffff', alignItems: 'center', justifyContent: 'center', padding: 24 },
+  title: { fontSize: 24, fontWeight: 'bold', color: '#111827', marginBottom: 8 },
+  subtitle: { fontSize: 16, color: '#6b7280', marginBottom: 40 },
+  reactionGrid: { flexDirection: 'row', gap: 20 },
+  reactionButton: { alignItems: 'center', padding: 16, borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 16, width: 95, backgroundColor: '#fff' },
+  disabledButton: { opacity: 0.5 },
+  emoji: { fontSize: 40, marginBottom: 8 },
+  reactionLabel: { fontSize: 12, color: '#374151', fontWeight: '500' },
+  loaderContainer: { marginTop: 30, alignItems: 'center' },
+  loaderText: { marginTop: 10, color: '#6366f1', fontWeight: '500' },
+  closeButton: { marginTop: 60 },
+  closeButtonText: { color: '#9ca3af', fontSize: 14, textDecorationLine: 'underline' }
 });
 
 export default MissionProgressScreen;
-

@@ -1,5 +1,5 @@
 import express from 'express';
-import { supabase } from '../config/supabase.js';
+import { supabaseAdmin } from '../config/supabase.js';
 import { authenticateUser } from '../middleware/auth.js';
 import { createSuccessResponse } from '../utils/helpers.js';
 
@@ -17,7 +17,7 @@ router.get('/:childId/monthly', async (req, res, next) => {
     const { year, month } = req.query;
 
     // 자녀 소유권 확인
-    const { data: child } = await supabase
+    const { data: child } = await supabaseAdmin
       .from('children')
       .select('id')
       .eq('id', childId)
@@ -39,7 +39,7 @@ router.get('/:childId/monthly', async (req, res, next) => {
     const endDate = new Date(targetYear, targetMonth, 0, 23, 59, 59);
 
     // 해당 월의 미션 로그 조회
-    const { data: logs, error } = await supabase
+    const { data: logs, error } = await supabaseAdmin
       .from('mission_logs')
       .select(`
         *,
@@ -111,7 +111,7 @@ router.get('/:childId/summary', async (req, res, next) => {
     const { childId } = req.params;
 
     // 자녀 정보 조회
-    const { data: child, error: childError } = await supabase
+    const { data: child, error: childError } = await supabaseAdmin
       .from('children')
       .select(`
         *,
@@ -130,9 +130,9 @@ router.get('/:childId/summary', async (req, res, next) => {
     }
 
     // 전체 미션 로그 통계
-    const { data: allLogs } = await supabase
+    const { data: allLogs } = await supabaseAdmin
       .from('mission_logs')
-      .select('*')
+      .select('book_id, activity_type')
       .eq('child_id', childId);
 
     const readingCount = allLogs?.filter(log => log.activity_type === 'reading').length || 0;
@@ -162,4 +162,3 @@ router.get('/:childId/summary', async (req, res, next) => {
 });
 
 export default router;
-

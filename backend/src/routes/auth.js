@@ -1,5 +1,5 @@
 import express from 'express';
-import { supabase } from '../config/supabase.js';
+import { supabase, supabaseAdmin } from '../config/supabase.js';
 import { authenticateUser } from '../middleware/auth.js';
 
 const router = express.Router();
@@ -10,7 +10,7 @@ const router = express.Router();
  */
 router.get('/me', authenticateUser, async (req, res, next) => {
   try {
-    const { data: user, error } = await supabase
+    const { data: user, error } = await supabaseAdmin
       .from('users')
       .select('*')
       .eq('id', req.userId)
@@ -61,7 +61,7 @@ router.post('/signup', async (req, res, next) => {
 
     // users 테이블에 메타데이터 추가 (트리거로 자동 생성될 수도 있음)
     if (authData.user) {
-      const { error: userError } = await supabase
+      const { error: userError } = await supabaseAdmin
         .from('users')
         .insert({
           id: authData.user.id,
@@ -126,4 +126,3 @@ router.post('/login', async (req, res, next) => {
 });
 
 export default router;
-

@@ -1,5 +1,5 @@
 import express from 'express';
-import { supabase } from '../config/supabase.js';
+import { supabase, supabaseAdmin } from '../config/supabase.js'; // supabaseAdmin 추가
 import { optionalAuth, authenticateUser } from '../middleware/auth.js';
 import { validateBookSearch } from '../utils/validators.js';
 import { createSuccessResponse, parsePagination, createPaginationMeta } from '../utils/helpers.js';
@@ -47,13 +47,7 @@ router.get('/search', optionalAuth, validateBookSearch, async (req, res, next) =
     }
 
     // 정렬
-    if (sort === 'popular') {
-      // 인기순: mission_logs에서 reaction='love'인 횟수 기준
-      // 이 부분은 복잡하므로 서브쿼리나 뷰를 사용하거나 애플리케이션 레벨에서 처리
-      query = query.order('created_at', { ascending: false });
-    } else {
-      query = query.order('created_at', { ascending: false });
-    }
+    query = query.order('created_at', { ascending: false });
 
     // 페이지네이션
     query = query.range(offset, offset + limit - 1);
@@ -113,14 +107,14 @@ router.get('/:bookId', optionalAuth, async (req, res, next) => {
 
 /**
  * GET /api/books/daily/:childId
- * 오늘의 미션 추천 (Rule-based 알고리즘)
+ * 오늘의 미션 추천 (개선된 Rule-based 알고리즘)
  */
 router.get('/daily/:childId', authenticateUser, async (req, res, next) => {
   try {
     const { childId } = req.params;
 
-    // 자녀 정보 조회
-    const { data: child, error: childError } = await supabase
+    // 1. 자녀 정보 조회 (supabaseAdmin 사용하여 RLS 우회)
+    const { data: child, error: childError } = await supabaseAdmin
       .from('children')
       .select(`
         *,
@@ -138,17 +132,14 @@ router.get('/daily/:childId', authenticateUser, async (req, res, next) => {
       });
     }
 
-    // AR 범위 계산
+    // 2. AR 추천 범위 계산 (±0.5)
     const minAr = child.current_level?.min_ar || 0;
     const maxAr = child.current_level?.max_ar || 5;
     const arMin = Math.max(0, minAr - 0.5);
     const arMax = maxAr + 0.5;
 
-    // 관심사 태그 ID 추출
-    const interestThemeIds = child.interests?.map(ci => ci.theme.id) || [];
-
-    // 이미 읽은 책 ID 조회
-    const { data: readBooks } = await supabase
+    // 3. 이미 읽은 책 ID 조회
+    const { data: readBooks } = await supabaseAdmin
       .from('mission_logs')
       .select('book_id')
       .eq('child_id', childId)
@@ -156,72 +147,65 @@ router.get('/daily/:childId', authenticateUser, async (req, res, next) => {
 
     const readBookIds = readBooks?.map(rb => rb.book_id) || [];
 
-    // 추천 쿼리 구성
-    let query = supabase
-      .from('books')
-      .select(`
-        *,
-        themes:book_themes(theme:themes(*)),
-        moods:book_moods(mood:moods(*))
-      `)
-      .gte('ar_level', arMin)
-      .lte('ar_level', arMax);
-
-    // 관심사 매칭 (관심사가 있는 경우)
-    if (interestThemeIds.length > 0) {
-      // 주제 태그가 하나라도 일치하는 책 필터링
-      query = query.in('book_themes.theme_id', interestThemeIds);
-    }
-
-    // 미읽음 필터
-    if (readBookIds.length > 0) {
-      query = query.not('id', 'in', `(${readBookIds.join(',')})`);
-    }
-
-    // 랜덤 정렬
-    query = query.order('created_at', { ascending: false }).limit(100);
-
-    const { data: candidates, error } = await query;
-
-    if (error) {
-      return res.status(500).json({
-        error: 'Database Error',
-        message: error.message,
-      });
-    }
-
-    // 후보가 없으면 Fallback: 베스트셀러 또는 기본 도서
+    // 4. [알고리즘 Step 1] 레벨 범위 내 + 관심사(Theme) 매칭 도서 찾기
+    const interestThemeIds = child.interests?.map(ci => ci.theme.id) || [];
     let recommendedBook = null;
-    if (candidates && candidates.length > 0) {
-      // 랜덤 선택
-      recommendedBook = candidates[Math.floor(Math.random() * candidates.length)];
-    } else {
-      // Fallback: AR 레벨에 맞는 인기 도서
-      const { data: fallbackBooks } = await supabase
+    let reason = '아이의 관심사와 레벨을 반영한 추천이에요 ✨';
+
+    if (interestThemeIds.length > 0) {
+      let query = supabaseAdmin
+        .from('books')
+        .select(`
+          *,
+          themes:book_themes!inner(theme_id)
+        `)
+        .gte('ar_level', arMin)
+        .lte('ar_level', arMax)
+        .in('book_themes.theme_id', interestThemeIds);
+
+      if (readBookIds.length > 0) {
+        query = query.not('id', 'in', `(${readBookIds.join(',')})`);
+      }
+
+      const { data: interestMatch } = await query.limit(20);
+
+      if (interestMatch && interestMatch.length > 0) {
+        recommendedBook = interestMatch[Math.floor(Math.random() * interestMatch.length)];
+      }
+    }
+
+    // 5. [알고리즘 Step 2] 관심사 매칭이 없으면 레벨 범위 내에서 랜덤 추천 (Fallback)
+    if (!recommendedBook) {
+      reason = '아이의 읽기 레벨에 딱 맞는 도서예요 📖';
+      let query = supabaseAdmin
         .from('books')
         .select('*')
         .gte('ar_level', arMin)
-        .lte('ar_level', arMax)
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .single();
+        .lte('ar_level', arMax);
 
-      recommendedBook = fallbackBooks;
+      if (readBookIds.length > 0) {
+        query = query.not('id', 'in', `(${readBookIds.join(',')})`);
+      }
+
+      const { data: levelMatch } = await query.limit(20);
+
+      if (levelMatch && levelMatch.length > 0) {
+        recommendedBook = levelMatch[Math.floor(Math.random() * levelMatch.length)];
+      }
     }
 
+    // 최종 결과 확인
     if (!recommendedBook) {
       return res.status(404).json({
         error: 'Not Found',
-        message: 'No recommended book found',
+        message: '현재 레벨에 맞는 도서 데이터가 없습니다. 도서를 추가해 주세요.',
       });
     }
 
     res.json(createSuccessResponse({
       book: recommendedBook,
       child_id: parseInt(childId),
-      recommendation_reason: interestThemeIds.length > 0
-        ? 'Based on your interests and reading level'
-        : 'Based on your reading level',
+      recommendation_reason: reason,
     }));
   } catch (error) {
     next(error);
@@ -229,4 +213,3 @@ router.get('/daily/:childId', authenticateUser, async (req, res, next) => {
 });
 
 export default router;
-
