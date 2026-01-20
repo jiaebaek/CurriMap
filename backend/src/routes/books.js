@@ -82,7 +82,7 @@ router.get('/:bookId', optionalAuth, async (req, res, next) => {
   try {
     const { bookId } = req.params;
 
-    const { data: book, error } = await supabase
+    const { data: book, error } = await supabaseAdmin
       .from('books')
       .select(`
         *,

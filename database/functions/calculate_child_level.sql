@@ -1,8 +1,3 @@
--- ============================================
--- Function: calculate_child_level
--- Description: 자녀의 온보딩 응답 점수를 기반으로 레벨을 자동 계산
--- ============================================
-
 CREATE OR REPLACE FUNCTION calculate_child_level(p_child_id BIGINT)
 RETURNS INTEGER AS $$
 DECLARE
@@ -16,10 +11,6 @@ BEGIN
     FROM children
     WHERE id = p_child_id;
     
-    IF v_birth_months IS NULL THEN
-        RAISE EXCEPTION 'Child with id % not found', p_child_id;
-    END IF;
-    
     -- 2. 연령 그룹 결정
     v_age_group := CASE
         WHEN v_birth_months < 48 THEN 'infant'           -- 0~3세
@@ -28,7 +19,7 @@ BEGIN
         ELSE 'upper_elem'                                 -- 초4~6
     END;
     
-    -- 3. 응답 점수 합계 계산
+    -- 3. 응답 점수 합계 계산 (현재 응답 테이블 구조 반영)
     SELECT COALESCE(SUM(qo.score), 0) INTO v_total_score
     FROM onboarding_responses or_table
     JOIN question_options qo ON or_table.option_id = qo.id
@@ -41,14 +32,13 @@ BEGIN
     FROM level_thresholds
     WHERE age_group = v_age_group
       AND v_total_score BETWEEN min_score AND max_score
-    ORDER BY min_score DESC
     LIMIT 1;
     
-    -- 5. 레벨이 없으면 NULL 반환 (기본 레벨 할당은 애플리케이션 레벨에서 처리)
+    -- 5. 레벨이 없으면 연령 기반 기본 레벨 할당
+    IF v_level_id IS NULL THEN
+        v_level_id := assign_level_by_age(v_birth_months);
+    END IF;
+    
     RETURN v_level_id;
 END;
 $$ LANGUAGE plpgsql;
-
-COMMENT ON FUNCTION calculate_child_level IS '자녀의 온보딩 응답 점수를 기반으로 레벨을 자동 계산';
-
-

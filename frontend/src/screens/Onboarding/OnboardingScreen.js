@@ -2,11 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert } from 'react-native';
 import { useAuth } from '../../context/AuthContext';
 import { post, get } from '../../config/api';
-import { useNavigation } from '@react-navigation/native';
 
 const OnboardingScreen = () => {
-  const { user, refreshOnboardingStatus } = useAuth();
-  const navigation = useNavigation();
+  const { refreshOnboardingStatus } = useAuth(); // 전역 상태 갱신 함수 가져오기
   const [step, setStep] = useState(1);
   const [childId, setChildId] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -75,13 +73,16 @@ const OnboardingScreen = () => {
 
   const calculateLevel = async () => {
     try {
+      // 1. 서버에서 레벨 계산 수행
       await post(`/onboarding/calculate-level/${childId}`);
-      // 중요: 전역 상태 갱신하여 AppNavigator가 Home으로 전환하게 함
-      await refreshOnboardingStatus(user);
-      Alert.alert('완료', '온보딩이 완료되었습니다!', [
-        { text: '확인' }
-      ]);
-    } catch (error) { Alert.alert('오류', error.message); }
+      
+      // 2. 전역 상태를 갱신하여 AppNavigator가 Home으로 화면을 전환하게 함
+      refreshOnboardingStatus();
+      
+      Alert.alert('완료', '온보딩이 완료되었습니다!');
+    } catch (error) { 
+      Alert.alert('오류', '레벨 계산 중 문제가 발생했습니다.'); 
+    }
   };
 
   const toggleTheme = (themeId) => {
@@ -89,6 +90,7 @@ const OnboardingScreen = () => {
     else setSelectedThemes([...selectedThemes, themeId]);
   };
 
+  // ... 렌더링 로직 (Step 1, 2, 3) 이전 코드와 동일
   if (step === 1) {
     return (
       <ScrollView style={styles.container}><View style={styles.content}>

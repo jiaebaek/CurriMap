@@ -34,8 +34,8 @@ router.get('/questions/:childId', async (req, res, next) => {
 
     const ageGroup = getAgeGroup(child.birth_months);
 
-    // 질문 정보는 공용 데이터이므로 supabase 사용 가능
-    const { data: questions, error: questionsError } = await supabase
+    // 질문 정보 조회 시 supabase 대신 supabaseAdmin 사용
+    const { data: questions, error: questionsError } = await supabaseAdmin
       .from('onboarding_questions')
       .select(`
         *,
