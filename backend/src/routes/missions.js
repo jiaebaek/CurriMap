@@ -1,164 +1,102 @@
 import express from 'express';
 import { supabaseAdmin } from '../config/supabase.js';
 import { authenticateUser } from '../middleware/auth.js';
-import { validateMissionComplete } from '../utils/validators.js';
 import { createSuccessResponse } from '../utils/helpers.js';
 
 const router = express.Router();
-
 router.use(authenticateUser);
 
-/**
- * POST /api/missions/complete
- * 미션 완료 및 기록 저장
- */
-router.post('/complete', validateMissionComplete, async (req, res, next) => {
-  try {
-    const { child_id, book_id, activity_type, reaction, course_id, checklist, is_manual_log } = req.body;
+// 오늘의 미션 조회 (홈 화면용)
 
-    // 자녀 소유권 확인
-    const { data: child } = await supabaseAdmin
-      .from('children')
-      .select('id')
-      .eq('id', child_id)
-      .eq('user_id', req.userId)
-      .single();
-
-    if (!child) {
-      return res.status(404).json({
-        error: 'Not Found',
-        message: 'Child not found',
-      });
-    }
-
-    // activity_type이 'reading'인 경우 book_id 필수
-    if (activity_type === 'reading' && !book_id) {
-      return res.status(400).json({
-        error: 'Bad Request',
-        message: 'book_id is required for reading activity',
-      });
-    }
-
-    // 미션 로그 저장 (read_count는 트리거가 자동 설정)
-    const { data: missionLog, error } = await supabaseAdmin
-      .from('mission_logs')
-      .insert({
-        child_id: parseInt(child_id),
-        user_id: req.userId,
-        book_id: book_id || null,
-        course_id: course_id || null,
-        activity_type,
-        reaction: reaction || null,
-        checklist: checklist || null,
-        is_manual_log: is_manual_log || false,
-        logged_at: new Date().toISOString(),
-      })
-      .select()
-      .single();
-
-    if (error) {
-      return res.status(500).json({
-        error: 'Database Error',
-        message: error.message,
-      });
-    }
-
-    // 통계는 트리거가 자동 업데이트하므로 여기서는 성공 응답만 반환
-    res.status(201).json(createSuccessResponse(missionLog, 'Mission completed successfully'));
-  } catch (error) {
-    next(error);
-  }
-});
-
-/**
- * GET /api/missions/:childId/history
- * 자녀의 미션 기록 이력 조회
- */
-router.get('/:childId/history', async (req, res, next) => {
+router.get('/today/:childId', async (req, res, next) => {
   try {
     const { childId } = req.params;
-    const { limit = 50, offset = 0 } = req.query;
+    const { data: child } = await supabaseAdmin.from('children').select('current_level_id').eq('id', childId).single();
 
-    // 자녀 소유권 확인
-    const { data: child } = await supabaseAdmin
-      .from('children')
-      .select('id')
-      .eq('id', childId)
-      .eq('user_id', req.userId)
-      .single();
+    const { data: missions } = await supabaseAdmin
+      .from('daily_missions')
+      .select('*, book:books(*)')
+      .eq('level_id', child.current_level_id)
+      .order('sequence_order', { ascending: true });
 
-    if (!child) {
-      return res.status(404).json({
-        error: 'Not Found',
-        message: 'Child not found',
-      });
-    }
+    const formattedMissions = await Promise.all(missions.map(async (m) => {
+      // ✅ 횟수 집계 로직: 
+      // 독서 미션이면 book_id로 찾고, 일반 미션이면 mission_id로 정확히 찾음
+      const query = supabaseAdmin
+        .from('mission_logs')
+        .select('*', { count: 'exact', head: true })
+        .eq('child_id', childId);
 
-    const { data: logs, error } = await supabaseAdmin
-      .from('mission_logs')
-      .select(`
-        *,
-        book:books(*)
-      `)
-      .eq('child_id', childId)
-      .order('logged_at', { ascending: false })
-      .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1);
+      if (m.book_id) {
+        query.eq('book_id', m.book_id);
+      } else {
+        query.eq('mission_id', m.id);
+      }
 
-    if (error) {
-      return res.status(500).json({
-        error: 'Database Error',
-        message: error.message,
-      });
-    }
+      const { count } = await query;
 
-    res.json(createSuccessResponse(logs));
-  } catch (error) {
-    next(error);
-  }
+      return {
+        ...m,
+        // 프론트엔드와 ID 형식을 맞춤 (기존 로직 유지)
+        id: m.book_id ? `b-${m.id}` : `g-${m.id}`, 
+        current_count: count || 0,
+        is_completed: (count || 0) >= m.target_count
+      };
+    }));
+
+    res.json(createSuccessResponse(formattedMissions));
+  } catch (error) { next(error); }
 });
 
-/**
- * GET /api/missions/:childId/stats
- * 자녀의 미션 통계 요약
- */
-router.get('/:childId/stats', async (req, res, next) => {
+// 미션 수행 기록 저장
+router.post('/complete', async (req, res, next) => {
   try {
-    const { childId } = req.params;
+    const { childId, missionId, bookId } = req.body;
 
-    // 자녀 소유권 확인
-    const { data: child } = await supabaseAdmin
-      .from('children')
-      .select('id, total_books_read, total_word_count, current_streak, longest_streak')
-      .eq('id', childId)
-      .eq('user_id', req.userId)
-      .single();
+    // 🚩 서버 터미널에 로그 출력 (데이터가 어떻게 들어오는지 확인용)
+    console.log('📥 [Mission Complete Request]', { childId, missionId, bookId });
 
-    if (!child) {
-      return res.status(404).json({
-        error: 'Not Found',
-        message: 'Child not found',
-      });
+    // ID 값들을 숫자로 강제 변환 (문자열 "22"가 들어와도 DB에는 숫자 22로 저장되게 함)
+    const payload = {
+      child_id: Number(childId),
+      mission_id: missionId ? Number(missionId) : null,
+      book_id: bookId ? Number(bookId) : null,
+      completed_at: new Date()
+    };
+
+    // 🚩 변환된 데이터 로그 출력
+    console.log('📤 [Formatted Payload]', payload);
+
+    const { data, error } = await supabaseAdmin
+      .from('mission_logs')
+      .insert(payload)
+      .select(); // 저장된 결과 반환 요청
+
+    if (error) {
+      console.error('❌ [DB Insert Error]', error);
+      return res.status(400).json({ error: error.message });
     }
 
-    // 월간 통계 (이번 달)
-    const startOfMonth = new Date();
-    startOfMonth.setDate(1);
-    startOfMonth.setHours(0, 0, 0, 0);
-
-    const { count: monthlyCount } = await supabaseAdmin
+    // 최신 카운트 계산
+    const query = supabaseAdmin
       .from('mission_logs')
       .select('*', { count: 'exact', head: true })
-      .eq('child_id', childId)
-      .gte('logged_at', startOfMonth.toISOString());
+      .eq('child_id', payload.child_id);
 
-    res.json(createSuccessResponse({
-      total_books_read: child.total_books_read,
-      total_word_count: child.total_word_count,
-      current_streak: child.current_streak,
-      longest_streak: child.longest_streak,
-      monthly_mission_count: monthlyCount || 0,
+    if (payload.book_id) {
+      query.eq('book_id', payload.book_id);
+    } else {
+      query.eq('mission_id', payload.mission_id);
+    }
+
+    const { count } = await query;
+
+    res.json(createSuccessResponse({ 
+      success: true, 
+      updated_count: count || 0 
     }));
   } catch (error) {
+    console.error('🔥 [Server Error]', error);
     next(error);
   }
 });

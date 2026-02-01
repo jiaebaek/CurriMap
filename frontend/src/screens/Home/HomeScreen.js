@@ -1,188 +1,145 @@
 import React, { useState, useCallback } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
-  RefreshControl,
-  ActivityIndicator,
-} from 'react-native';
-import { useAuth } from '../../context/AuthContext';
-import { get } from '../../config/api';
-import { useNavigation, useFocusEffect } from '@react-navigation/native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, SafeAreaView, Alert } from 'react-native';
+import { MaterialCommunityIcons, Ionicons } from '@expo/vector-icons';
+import { get, post } from '../../config/api';
+import { useFocusEffect } from '@react-navigation/native';
 
-const HomeScreen = () => {
-  const { user } = useAuth();
-  const navigation = useNavigation();
+const HomeScreen = ({ navigation }) => {
+  const [missions, setMissions] = useState([]);
   const [child, setChild] = useState(null);
-  const [dailyMission, setDailyMission] = useState(null);
-  const [stats, setStats] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
 
-  const loadData = async () => {
+  const fetchData = async () => {
     try {
-      const childResponse = await get('/children');
-      
-      if (childResponse.data && childResponse.data.length > 0) {
-        const activeChild = childResponse.data[0];
-        setChild(activeChild);
-
-        const missionData = await get(`/books/daily/${activeChild.id}`);
-        setDailyMission(missionData.data);
-
-        const statsData = await get(`/missions/${activeChild.id}/stats`);
-        setStats(statsData.data);
+      const childRes = await get('/children');
+      if (childRes.data?.length > 0) {
+        setChild(childRes.data[0]);
+        // 백엔드의 /api/missions/today/:childId 호출
+        const res = await get(`/missions/today/${childRes.data[0].id}`);
+        setMissions(res.data);
       }
-    } catch (error) {
-      console.error('❌ [Home] Error loading data:', error);
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
+    } catch (e) { console.error(e); }
+  };
+
+  useFocusEffect(useCallback(() => { fetchData(); }, []));
+
+  const handleComplete = async (mission) => {
+    // 1. 낙관적 업데이트 (화면 숫자 먼저 올리기)
+    const initialCount = mission.current_count;
+    setMissions(prev => prev.map(m => 
+      m.id === mission.id ? { ...m, current_count: m.current_count + 1 } : m
+    ));
+
+    try {
+      // 2. ID 정제: "g-22" -> 22 / "b-10" -> 10
+      const missionIdStr = String(mission.id);
+      const pureId = missionIdStr.includes('-') ? missionIdStr.split('-')[1] : missionIdStr;
+
+      const body = {
+        childId: child.id,
+        missionId: mission.book_id ? null : parseInt(pureId), // 책 미션이면 mission_id는 제외
+        bookId: mission.book_id ? parseInt(mission.book_id) : null
+      };
+
+      console.log('🚀 [Request Body]', body);
+
+      const response = await post('/missions/complete', body);
+
+      if (response.data && response.data.updated_count !== undefined) {
+        setMissions(prev => prev.map(m => 
+          m.id === mission.id ? { ...m, current_count: response.data.updated_count } : m
+        ));
+      }
+    } catch (e) {
+      console.error("[API Error]", e);
+      setMissions(prev => prev.map(m => m.id === mission.id ? { ...m, current_count: initialCount } : m));
+      Alert.alert("알림", "기록에 실패했습니다. 네트워크를 확인해주세요.");
     }
   };
 
-  useFocusEffect(
-    useCallback(() => {
-      loadData();
-    }, [])
-  );
-
-  const onRefresh = () => {
-    setRefreshing(true);
-    loadData();
-  };
-
-  if (loading && !refreshing) {
-    return (
-      <View style={[styles.container, styles.center]}>
-        <ActivityIndicator size="large" color="#6366f1" />
-      </View>
-    );
-  }
-
-  if (!child) {
-    return (
-      <View style={[styles.container, styles.center]}>
-        <Text style={styles.noChildText}>등록된 자녀 정보가 없습니다. 🧐</Text>
-        <TouchableOpacity
-          style={styles.onboardingButton}
-          onPress={() => navigation.navigate('Onboarding')}
-        >
-          <Text style={styles.onboardingButtonText}>온보딩 시작하기</Text>
-        </TouchableOpacity>
-      </View>
-    );
-  }
-
   return (
-    <ScrollView
-      style={styles.container}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-    >
+    <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.greeting}>{child.nickname} 안녕! 👋</Text>
-        <Text style={styles.subtitle}>오늘도 즐겁게 영어랑 놀아볼까?</Text>
+        <Text style={styles.welcome}>안녕하세요, {child?.nickname} 엄마! ✨</Text>
+        <Text style={styles.sub}>오늘의 3대 미션을 수행해주세요.</Text>
       </View>
 
-      {/* 통계 섹션 */}
-      {stats && (
-        <View style={styles.statsContainer}>
-          <View style={styles.statCard}>
-            <Text style={styles.statValue}>{stats.total_books_read || 0}</Text>
-            <Text style={styles.statLabel}>읽은 책</Text>
-          </View>
-          <View style={styles.statCard}>
-            <Text style={styles.statValue}>{stats.current_streak || 0}</Text>
-            <Text style={styles.statLabel}>연속 학습일</Text>
-          </View>
-          <View style={styles.statCard}>
-            <Text style={styles.statValue}>
-              {stats.total_word_count ? Math.floor(stats.total_word_count / 1000) : 0}K
-            </Text>
-            <Text style={styles.statLabel}>누적 단어</Text>
-          </View>
-        </View>
-      )}
+      <ScrollView contentContainerStyle={styles.content}>
+        {missions.map((m) => {
+          const isDone = m.current_count >= m.target_count;
+          const isReading = m.mission_type === 'reading' && m.book;
 
-      {/* 오늘의 미션 섹션 */}
-      {dailyMission && dailyMission.book ? (
-        <View style={styles.missionContainer}>
-          <Text style={styles.sectionTitle}>📖 오늘의 미션</Text>
-          <TouchableOpacity
-            style={styles.missionCard}
-            onPress={() => 
-              // 수정: bookId와 함께 childId도 전달합니다.
-              navigation.navigate('BookDetail', { 
-                bookId: dailyMission.book.id,
-                childId: child.id 
-              })
-            }
-          >
-            <View style={styles.bookInfo}>
-              <Text style={styles.bookTitle}>{dailyMission.book.title}</Text>
-              <Text style={styles.bookAuthor}>{dailyMission.book.author}</Text>
-              <View style={styles.badgeRow}>
-                <View style={styles.arBadge}>
-                  <Text style={styles.arText}>AR {dailyMission.book.ar_level || 'N/A'}</Text>
-                </View>
-                {dailyMission.recommendation_reason && (
-                  <Text style={styles.reasonText}>✨ {dailyMission.recommendation_reason}</Text>
-                )}
+          return (
+            <View key={m.id} style={[styles.card, isDone && styles.cardDone]}>
+              <View style={styles.cardHeader}>
+                <Text style={styles.mType}>{m.mission_type.toUpperCase()}</Text>
+                {isDone && <Ionicons name="checkmark-circle" size={18} color="#10b981" />}
               </View>
+              
+              <Text style={styles.mTitle}>{m.title}</Text>
+              
+              {/* 추가된 부분: 독서 미션일 때 책 정보 표시 */}
+              {isReading && (
+                <TouchableOpacity 
+                  style={styles.bookInfoBox}
+                  onPress={() => navigation.navigate('BookDetail', { bookId: m.book_id })}
+                >
+                  <View style={styles.bookTag}>
+                    <MaterialCommunityIcons name="book-open-variant" size={14} color="#6366f1" />
+                    <Text style={styles.bookTagText}>추천 도서</Text>
+                  </View>
+                  <Text style={styles.bookTitle}>{m.book.title}</Text>
+                  <Text style={styles.bookAuthor} numberOfLines={1}>{m.book.author}</Text>
+                </TouchableOpacity>
+              )}
+
+              <View style={styles.progressRow}>
+                <View style={styles.barBg}>
+                  <View style={[styles.barFill, { width: `${(m.current_count / m.target_count) * 100}%` }]} />
+                </View>
+                <Text style={styles.countText}>{m.current_count}/{m.target_count}</Text>
+              </View>
+
+              <TouchableOpacity 
+                style={[styles.btn, isDone && styles.btnDone]} 
+                onPress={() => handleComplete(m)}
+                disabled={isDone}
+              >
+                <Text style={styles.btnText}>{isDone ? "미션 완료 🎉" : "수행 완료 👆"}</Text>
+              </TouchableOpacity>
             </View>
-            
-            <TouchableOpacity
-              style={styles.startButton}
-              onPress={() => navigation.navigate('MissionProgress', {
-                bookId: dailyMission.book.id,
-                childId: child.id,
-              })}
-            >
-              <Text style={styles.startButtonText}>미션 시작하기</Text>
-            </TouchableOpacity>
-          </TouchableOpacity>
-        </View>
-      ) : (
-        <View style={styles.missionContainer}>
-          <Text style={styles.sectionTitle}>📖 오늘의 미션</Text>
-          <View style={styles.emptyMissionCard}>
-            <Text style={styles.emptyText}>오늘은 모든 미션을 완료했어요! 🎉</Text>
-          </View>
-        </View>
-      )}
-    </ScrollView>
+          );
+        })}
+      </ScrollView>
+    </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f9fafb' },
-  center: { justifyContent: 'center', alignItems: 'center', padding: 24 },
-  header: { padding: 24, backgroundColor: '#ffffff', borderBottomWidth: 1, borderBottomColor: '#e5e7eb' },
-  greeting: { fontSize: 24, fontWeight: 'bold', color: '#111827' },
-  subtitle: { fontSize: 16, color: '#6b7280', marginTop: 4 },
-  statsContainer: { flexDirection: 'row', padding: 16, gap: 12 },
-  statCard: { flex: 1, backgroundColor: '#ffffff', borderRadius: 12, padding: 16, alignItems: 'center', borderWidth: 1, borderColor: '#e5e7eb' },
-  statValue: { fontSize: 22, fontWeight: 'bold', color: '#6366f1' },
-  statLabel: { fontSize: 12, color: '#6b7280', marginTop: 4 },
-  missionContainer: { padding: 16 },
-  sectionTitle: { fontSize: 18, fontWeight: '700', color: '#111827', marginBottom: 12 },
-  missionCard: { backgroundColor: '#ffffff', borderRadius: 16, padding: 20, borderWidth: 1, borderColor: '#e5e7eb' },
-  bookInfo: { marginBottom: 16 },
-  bookTitle: { fontSize: 20, fontWeight: 'bold', color: '#111827' },
-  bookAuthor: { fontSize: 14, color: '#6b7280', marginBottom: 8 },
-  badgeRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  arBadge: { backgroundColor: '#eef2ff', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 },
-  arText: { fontSize: 12, color: '#6366f1', fontWeight: 'bold' },
-  reasonText: { fontSize: 12, color: '#10b981' },
-  startButton: { backgroundColor: '#6366f1', borderRadius: 10, padding: 14, alignItems: 'center' },
-  startButtonText: { color: '#ffffff', fontSize: 16, fontWeight: '600' },
-  noChildText: { fontSize: 18, fontWeight: 'bold', color: '#374151', marginBottom: 20 },
-  onboardingButton: { backgroundColor: '#6366f1', paddingHorizontal: 24, paddingVertical: 12, borderRadius: 8 },
-  onboardingButtonText: { color: '#ffffff', fontWeight: 'bold' },
-  emptyMissionCard: { padding: 30, backgroundColor: '#f3f4f6', borderRadius: 16, alignItems: 'center' },
-  emptyText: { fontSize: 16, fontWeight: 'bold', color: '#374151' }
+  container: { flex: 1, backgroundColor: '#f8fafc' },
+  header: { padding: 24, backgroundColor: '#fff', borderBottomLeftRadius: 20, borderBottomRightRadius: 20 },
+  welcome: { fontSize: 22, fontWeight: 'bold', color: '#1e293b' },
+  sub: { color: '#64748b', marginTop: 4 },
+  content: { padding: 20 },
+  card: { backgroundColor: '#fff', borderRadius: 24, padding: 24, marginBottom: 16, elevation: 4 },
+  cardDone: { backgroundColor: '#f0fdf4', borderColor: '#10b981', borderWidth: 1 },
+  cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  mType: { fontSize: 11, fontWeight: 'bold', color: '#6366f1' },
+  mTitle: { fontSize: 18, fontWeight: 'bold', marginTop: 4, color: '#1e293b', marginBottom: 12 },
+  
+  // 책 정보 박스 스타일
+  bookInfoBox: { backgroundColor: '#f1f5f9', borderRadius: 16, padding: 15, marginBottom: 15, borderLeftWidth: 4, borderLeftColor: '#6366f1' },
+  bookTag: { flexDirection: 'row', alignItems: 'center', marginBottom: 4 },
+  bookTagText: { fontSize: 11, fontWeight: 'bold', color: '#6366f1', marginLeft: 4 },
+  bookTitle: { fontSize: 15, fontWeight: 'bold', color: '#334155' },
+  bookAuthor: { fontSize: 13, color: '#64748b', marginTop: 2 },
+
+  progressRow: { flexDirection: 'row', alignItems: 'center', marginTop: 10 },
+  barBg: { flex: 1, height: 10, backgroundColor: '#e2e8f0', borderRadius: 5, overflow: 'hidden' },
+  barFill: { height: '100%', backgroundColor: '#10b981' },
+  countText: { marginLeft: 12, fontWeight: 'bold', color: '#334155' },
+  btn: { backgroundColor: '#6366f1', borderRadius: 16, padding: 16, marginTop: 20, alignItems: 'center' },
+  btnDone: { backgroundColor: '#cbd5e1' },
+  btnText: { color: '#fff', fontWeight: 'bold', fontSize: 15 }
 });
 
 export default HomeScreen;

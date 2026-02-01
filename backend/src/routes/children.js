@@ -163,4 +163,46 @@ router.post('/:childId/interests', validateInterests, async (req, res, next) => 
   }
 });
 
+/**
+ * GET /api/children/:childId/can-level-up
+ * 특정 자녀의 레벨업 가능 여부 확인
+ */
+router.get('/:childId/can-level-up', async (req, res, next) => {
+  try {
+    const { childId } = req.params;
+
+    // 1. 자녀 소유권 확인
+    const { data: child, error: checkError } = await supabaseAdmin
+      .from('children')
+      .select('id')
+      .eq('id', childId)
+      .eq('user_id', req.userId)
+      .single();
+
+    if (checkError || !child) {
+      return res.status(404).json({
+        error: 'Not Found',
+        message: 'Child not found',
+      });
+    }
+
+    // 2. DB 함수 호출하여 레벨업 가능 여부 확인
+    const { data: canLevelUp, error: rpcError } = await supabaseAdmin.rpc(
+      'check_level_up_eligibility',
+      { p_child_id: childId }
+    );
+
+    if (rpcError) {
+      return res.status(500).json({
+        error: 'Database RPC Error',
+        message: rpcError.message,
+      });
+    }
+
+    res.json(createSuccessResponse({ canLevelUp }));
+  } catch (error) {
+    next(error);
+  }
+});
+
 export default router;
